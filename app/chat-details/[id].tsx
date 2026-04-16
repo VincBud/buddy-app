@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import {
+    Alert,
     Image,
     Modal,
     Pressable,
@@ -17,8 +18,10 @@ import i18n, { useLanguage } from '../../lib/i18n';
 import {
     cancelJob,
     CancelJobReasonKey,
+    IssueResolution,
     ReportIssueReasonKey,
     reportJobIssue,
+    resolveJobIssue,
 } from '../../lib/job-actions';
 import { addNotification } from '../../services/notifications.service';
 import { Job, JobParticipantRole, JobStatus } from '../../lib/jobs';
@@ -79,6 +82,7 @@ export default function ChatDetailsScreen() {
   const [cancelNote, setCancelNote] = useState('');
   const [isSubmittingReport, setIsSubmittingReport] = useState(false);
   const [isSubmittingCancel, setIsSubmittingCancel] = useState(false);
+  const [isSubmittingResolve, setIsSubmittingResolve] = useState(false);
   const [reportFlowStep, setReportFlowStep] = useState<ReportFlowStep>('select');
   const [cancelFlowStep, setCancelFlowStep] = useState<CancelFlowStep>('select');
 
@@ -251,6 +255,55 @@ export default function ChatDetailsScreen() {
     }
   };
 
+  const submitIssueResolution = async (resolution: IssueResolution) => {
+    if (!job?.id || isSubmittingResolve) return;
+    try {
+      setIsSubmittingResolve(true);
+      const result = await resolveJobIssue({
+        jobId: job.id,
+        resolution,
+        resolvedByRole: currentUserRole,
+      });
+      if (result.updatedJob) {
+        setJob(result.updatedJob as JobWithDescription);
+      }
+    } finally {
+      setIsSubmittingResolve(false);
+    }
+  };
+
+  const handleContinueJob = () => submitIssueResolution('continue');
+
+  const handleCompleteJobFromIssue = () => {
+    Alert.alert(
+      i18n.t('chat.resolve_complete_confirm_title'),
+      i18n.t('chat.resolve_complete_confirm_message'),
+      [
+        { text: i18n.t('common.back'), style: 'cancel' },
+        {
+          text: i18n.t('chat.resolve_complete_confirm_yes'),
+          style: 'destructive',
+          onPress: () => submitIssueResolution('complete'),
+        },
+      ]
+    );
+  };
+
+  const handleCancelFromIssue = () => {
+    Alert.alert(
+      i18n.t('chat.resolve_cancel'),
+      i18n.t('chat.resolve_cancel_hint'),
+      [
+        { text: i18n.t('common.back'), style: 'cancel' },
+        {
+          text: i18n.t('chat.cancel_confirm_final'),
+          style: 'destructive',
+          onPress: () => submitIssueResolution('cancel'),
+        },
+      ]
+    );
+  };
+
   const selectedCancelReasonLabel = useMemo(() => {
     if (!cancelReason) return '';
     return i18n.t(`chat.cancel_reason_${cancelReason}`);
@@ -291,6 +344,39 @@ export default function ChatDetailsScreen() {
                 {i18n.t(`chat.report_reason_${job.issueSummary.reason}`)}
               </Text>
             )}
+          </View>
+        )}
+
+        {isIssueReported && (
+          <View style={styles.resolutionCard}>
+            <Text style={styles.resolutionSectionTitle}>{i18n.t('chat.resolve_section_title')}</Text>
+
+            <Pressable
+              style={[styles.resolutionOption, styles.resolutionOptionContinue, isSubmittingResolve && styles.actionButtonDisabled]}
+              onPress={handleContinueJob}
+              disabled={isSubmittingResolve}
+            >
+              <Text style={styles.resolutionOptionLabel}>{i18n.t('chat.resolve_continue')}</Text>
+              <Text style={styles.resolutionOptionHint}>{i18n.t('chat.resolve_continue_hint')}</Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.resolutionOption, styles.resolutionOptionComplete, isSubmittingResolve && styles.actionButtonDisabled]}
+              onPress={handleCompleteJobFromIssue}
+              disabled={isSubmittingResolve}
+            >
+              <Text style={styles.resolutionOptionLabel}>{i18n.t('chat.resolve_complete')}</Text>
+              <Text style={styles.resolutionOptionHint}>{i18n.t('chat.resolve_complete_hint')}</Text>
+            </Pressable>
+
+            <Pressable
+              style={[styles.resolutionOption, isSubmittingResolve && styles.actionButtonDisabled]}
+              onPress={handleCancelFromIssue}
+              disabled={isSubmittingResolve}
+            >
+              <Text style={[styles.resolutionOptionLabel, styles.resolutionOptionLabelCancel]}>{i18n.t('chat.resolve_cancel')}</Text>
+              <Text style={styles.resolutionOptionHint}>{i18n.t('chat.resolve_cancel_hint')}</Text>
+            </Pressable>
           </View>
         )}
 
@@ -734,6 +820,56 @@ const styles = StyleSheet.create({
   statusCardIssue: {
     backgroundColor: colors.lightOrange,
     borderColor: 'rgba(255, 64, 0, 0.25)',
+  },
+  resolutionCard: {
+    backgroundColor: colors.card,
+    borderRadius: layout.borderRadiusMedium,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 64, 0, 0.2)',
+    paddingHorizontal: layout.cardPadding,
+    paddingVertical: spacing.lg,
+    gap: spacing.sm,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+  },
+  resolutionSectionTitle: {
+    ...typography.metaStrong,
+    color: colors.textSecondary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+    marginBottom: spacing.xs,
+  },
+  resolutionOption: {
+    borderRadius: layout.borderRadiusSmall,
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
+    backgroundColor: colors.veryLightGrey,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    gap: 2,
+  },
+  resolutionOptionContinue: {
+    backgroundColor: colors.lightGreen,
+    borderColor: '#C6F0CC',
+  },
+  resolutionOptionComplete: {
+    backgroundColor: colors.veryLightPurple,
+    borderColor: colors.overlayLightPurple,
+  },
+  resolutionOptionLabel: {
+    ...typography.metaStrong,
+    color: colors.textPrimary,
+  },
+  resolutionOptionLabelCancel: {
+    color: colors.textSecondary,
+  },
+  resolutionOptionHint: {
+    ...typography.meta,
+    color: colors.textSecondary,
+    lineHeight: 16,
   },
   statusSubtitle: {
     ...typography.meta,

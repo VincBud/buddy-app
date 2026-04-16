@@ -25,6 +25,9 @@ export const STORAGE_KEYS = {
   // Audit / event logs
   JOB_ISSUE_REPORTS: 'jobIssueReports',
   JOB_CANCELLATIONS: 'jobCancellations',
+
+  // DEV ONLY — local user switcher
+  DEV_ACTIVE_USER: 'dev_active_user',
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

@@ -34,12 +34,17 @@ export type JobStatus =
 
 export type JobParticipantRole = 'auftraggeber' | 'buddy';
 
+export type IssueResolutionOutcome = 'continued' | 'cancelled' | 'completed';
+
 export type JobIssueSummary = {
   reportedAt: string;
   reporterRole: JobParticipantRole;
   reason: string;
   note?: string;
   escalationState?: 'reported' | 'in_review' | 'resolved';
+  resolvedAt?: string;
+  resolvedByRole?: JobParticipantRole;
+  resolution?: IssueResolutionOutcome;
 };
 
 export type JobCancellationSummary = {

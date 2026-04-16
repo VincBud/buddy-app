@@ -8,6 +8,7 @@ import RecommendationModal from '../../components/recommendation-modal';
 import { colors } from '../../lib/colors';
 import i18n, { useLanguage } from '../../lib/i18n';
 import { isJobChatAccessible } from '../../lib/job-actions';
+import { getActiveDevUserId } from '../../lib/dev-session';
 import {
     applyJobExpiry,
     getActiveOwnJobs,
@@ -16,7 +17,6 @@ import {
     isJobOpenForApplications,
     Job,
     JobCategory,
-    LOCAL_USER_ID,
 } from '../../lib/jobs';
 import { getLevelInfo, getStatusFromLevel } from '../../lib/levels';
 import { createNotification, Notification } from '../../lib/notifications';
@@ -144,9 +144,9 @@ export default function FeedScreen() {
       const filteredOpenJobs = safeJobs.filter((job: Job) => {
         // Only 'open' jobs appear in the public feed; matched/active/completed/cancelled/expired do not
         if (!isJobOpenForApplications(job.status)) return false;
-        if (job.requesterId === LOCAL_USER_ID) return false;
-        // Exclude jobs the local buddy has already applied to
-        if (job.match?.applications?.some((a) => a.buddyId === 'buddy_local')) return false;
+        if (job.requesterId === getActiveDevUserId()) return false;
+        // Exclude jobs the active dev user has already applied to
+        if (job.match?.applications?.some((a) => a.buddyId === getActiveDevUserId())) return false;
         if (!job.location) return true;
 
         return getDistance(
@@ -179,8 +179,8 @@ export default function FeedScreen() {
       const accepted = safeJobs.filter(
         (job: Job) =>
           isActiveJobStatus(job.status) &&
-          (job.requesterId === LOCAL_USER_ID ||
-            job.match?.selectedApplicationId === 'buddy_local')
+          (job.requesterId === getActiveDevUserId() ||
+            job.match?.selectedApplicationId === getActiveDevUserId())
       );
       const archived = safeJobs.filter(
         (job: Job) => job.status === 'completed' || job.status === 'expired'
@@ -551,7 +551,7 @@ export default function FeedScreen() {
   };
 
   const myActivePostedJobs = useMemo(
-    () => getActiveOwnJobs(allJobs, LOCAL_USER_ID),
+    () => getActiveOwnJobs(allJobs, getActiveDevUserId()),
     [allJobs]
   );
 

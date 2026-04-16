@@ -15,7 +15,8 @@ import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../lib/colors';
 import i18n, { useLanguage } from '../../lib/i18n';
-import { computeExpiresAt, Job, JOB_CATEGORIES, JobCategory, JobRebooking, LOCAL_USER_ID } from '../../lib/jobs';
+import { getActiveDevUser, getActiveDevUserId } from '../../lib/dev-session';
+import { computeExpiresAt, Job, JOB_CATEGORIES, JobCategory, JobRebooking } from '../../lib/jobs';
 import { createNotification, Notification } from '../../lib/notifications';
 import { createInitialPaymentState } from '../../lib/payments';
 import { loadPreferredBuddies, PreferredBuddy } from '../../lib/preferred-buddies';
@@ -342,8 +343,8 @@ export default function CreateScreen() {
 
     const newJob: Job = {
       id: Date.now().toString(),
-      requesterId: LOCAL_USER_ID,
-      creatorName: 'Vincent',
+      requesterId: getActiveDevUserId(),
+      creatorName: getActiveDevUser().name,
       category: selectedCategory,
       problem,
       price: finalPrice,

@@ -14,6 +14,7 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../lib/colors';
 import i18n, { useLanguage } from '../../lib/i18n';
+import { getActiveDevUser, getActiveDevUserId } from '../../lib/dev-session';
 import { requestJobApplication, reviewJobApplication } from '../../lib/job-actions';
 import {
     canExtendJob,
@@ -23,7 +24,6 @@ import {
     isJobOpenForApplications,
     Job,
     JobApplicationState,
-    LOCAL_USER_ID,
 } from '../../lib/jobs';
 import { getLevelInfo } from '../../lib/levels';
 import { goBackOrReplace } from '../../lib/navigation';
@@ -96,14 +96,15 @@ export default function JobDetailScreen() {
   const [isReviewingApplication, setIsReviewingApplication] = useState(false);
   const isEnglish = String(i18n.locale).toLowerCase().startsWith('en');
 
-  // The stable ID for the local buddy (non-owner) in this mock setup
-  const LOCAL_BUDDY_ID = 'buddy_local';
+  // Active dev user ID — drives both the owner check and the buddy application lookup
+  const activeDevUserId = getActiveDevUserId();
+  const activeDevUser = getActiveDevUser();
 
-  // The local buddy's own application on this job, if any
+  // The active dev user's own application on this job, if any
   const localApplication = useMemo(() => {
     if (!job) return null;
-    return job.match?.applications?.find((a) => a.buddyId === LOCAL_BUDDY_ID) ?? null;
-  }, [job]);
+    return job.match?.applications?.find((a) => a.buddyId === activeDevUserId) ?? null;
+  }, [job, activeDevUserId]);
 
   const jobId = useMemo(() => {
     if (!params.id) return '';
@@ -452,7 +453,7 @@ export default function JobDetailScreen() {
         jobId: job.id,
         buddyId,
         decision: 'accept',
-        requesterId: LOCAL_USER_ID,
+        requesterId: activeDevUserId,
       });
       if (result.updatedJob) setJob(result.updatedJob);
     } catch {
@@ -470,7 +471,7 @@ export default function JobDetailScreen() {
         jobId: job.id,
         buddyId,
         decision: 'decline',
-        requesterId: LOCAL_USER_ID,
+        requesterId: activeDevUserId,
       });
       if (result.updatedJob) setJob(result.updatedJob);
     } catch {
@@ -504,8 +505,8 @@ export default function JobDetailScreen() {
       const requestResult = await requestJobApplication({
         jobId: job.id,
         applicant: {
-          buddyId: 'buddy_local',
-          buddyName: isEnglish ? 'Buddy' : 'Buddy',
+          buddyId: activeDevUserId,
+          buddyName: activeDevUser.name,
           buddyScore,
           buddyRatingAverage: averageRating,
           buddyRatingCount: ratingCount,
@@ -1045,7 +1046,7 @@ export default function JobDetailScreen() {
 
   // ─── Main render dispatch ─────────────────────────────────────────────────
 
-  const isOwnerView = job.requesterId === LOCAL_USER_ID;
+  const isOwnerView = job.requesterId === activeDevUserId;
 
   return (
     <>

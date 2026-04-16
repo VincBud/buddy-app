@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
+    IssueResolutionOutcome,
     Job,
     JobApplicationState,
     JobParticipantRole,
@@ -448,4 +449,63 @@ export const isJobChatWritable = (status: JobStatus): boolean => {
 export const isJobChatAccessible = (job: Partial<Job> | null | undefined): boolean => {
   if (!job) return false;
   return isChatAccessibleForJob(job);
+};
+
+export type IssueResolution = 'continue' | 'cancel' | 'complete';
+
+const RESOLUTION_OUTCOME_MAP: Record<IssueResolution, IssueResolutionOutcome> = {
+  continue: 'continued',
+  cancel: 'cancelled',
+  complete: 'completed',
+};
+
+const RESOLUTION_STATUS_MAP: Record<IssueResolution, JobStatus> = {
+  continue: 'active',
+  cancel: 'cancelled',
+  complete: 'completed',
+};
+
+export const resolveJobIssue = async (params: {
+  jobId: string;
+  resolution: IssueResolution;
+  resolvedByRole: JobParticipantRole;
+  note?: string;
+}): Promise<{ updatedJob: Job | null; resultingStatus: JobStatus }> => {
+  const jobsRaw = await AsyncStorage.getItem(JOBS_STORAGE_KEY);
+  const jobs = safeParseJobs(jobsRaw);
+  const targetIndex = jobs.findIndex((job) => String(job.id) === String(params.jobId));
+
+  if (targetIndex < 0) {
+    return { updatedJob: null, resultingStatus: 'open' };
+  }
+
+  const targetJob = jobs[targetIndex];
+
+  if (targetJob.status !== 'issue_reported') {
+    return { updatedJob: targetJob, resultingStatus: targetJob.status };
+  }
+
+  const resultingStatus = RESOLUTION_STATUS_MAP[params.resolution];
+
+  const updatedJob: Job = {
+    ...targetJob,
+    status: resultingStatus,
+    payment: applyPaymentStateForJobStatus(
+      ensureJobPaymentState(targetJob),
+      resultingStatus
+    ),
+    issueSummary: {
+      ...targetJob.issueSummary!,
+      escalationState: 'resolved',
+      resolvedAt: getNowIso(),
+      resolvedByRole: params.resolvedByRole,
+      resolution: RESOLUTION_OUTCOME_MAP[params.resolution],
+    },
+  };
+
+  const nextJobs = [...jobs];
+  nextJobs[targetIndex] = updatedJob;
+  await AsyncStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(nextJobs));
+
+  return { updatedJob, resultingStatus };
 };

@@ -11,9 +11,10 @@ import { useCallback, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../lib/colors';
+import { DEV_USERS, getActiveDevUserId, useDevSession } from '../../lib/dev-session';
 import i18n, { getLanguage, setLanguage, useLanguage } from '../../lib/i18n';
 import { isJobChatAccessible } from '../../lib/job-actions';
-import { getActiveOwnJobs, getBuddyPointsForJob, getMatchedBuddyId, getMatchedBuddyName, isActiveJobStatus, isEligibleForRebooking, Job, LOCAL_USER_ID } from '../../lib/jobs';
+import { getActiveOwnJobs, getBuddyPointsForJob, getMatchedBuddyId, getMatchedBuddyName, isActiveJobStatus, isEligibleForRebooking, Job } from '../../lib/jobs';
 import { getLevelInfo } from '../../lib/levels';
 import { applyPaymentStateForJobStatus, ensureJobPaymentState } from '../../lib/payments';
 import {
@@ -28,6 +29,7 @@ import { typography } from '../../lib/typography';
 import { loadUserProfile, updateUserProfile } from '../../lib/user-profile';
 
 type ProfileSnapshot = {
+  allJobs: Job[];
   acceptedJobs: Job[];
   completedJobs: Job[];
   ownPostedJobs: Job[];
@@ -53,11 +55,12 @@ const loadProfileSnapshot = async (): Promise<ProfileSnapshot> => {
   const safeJobs: Job[] = Array.isArray(parsedJobs) ? parsedJobs : [];
   const acceptedJobs = safeJobs.filter((job: Job) => isActiveJobStatus(job.status));
   const completedJobs = safeJobs.filter((job: Job) => job.status === 'completed');
-  const ownPostedJobs = getActiveOwnJobs(safeJobs, LOCAL_USER_ID);
+  const ownPostedJobs = getActiveOwnJobs(safeJobs, getActiveDevUserId());
   const parsedScore = scoreRaw ? Number(scoreRaw) : 0;
   const wallet = await loadWalletSnapshot(completedJobs);
 
   return {
+    allJobs: safeJobs,
     acceptedJobs,
     completedJobs,
     ownPostedJobs,
@@ -74,6 +77,8 @@ export default function ProfileScreen() {
   useLanguage();
   const insets = useSafeAreaInsets();
   const currentLanguage = getLanguage();
+  const { activeUser, switchUser } = useDevSession();
+  const [allJobs, setAllJobs] = useState<Job[]>([]);
   const [acceptedJobs, setAcceptedJobs] = useState<Job[]>([]);
   const [completedJobs, setCompletedJobs] = useState<Job[]>([]);
   const [ownPostedJobs, setOwnPostedJobs] = useState<Job[]>([]);
@@ -91,6 +96,7 @@ export default function ProfileScreen() {
       setIsLoading(true);
       const snapshot = await loadProfileSnapshot();
 
+      setAllJobs(snapshot.allJobs);
       setAcceptedJobs(snapshot.acceptedJobs);
       setCompletedJobs(snapshot.completedJobs);
       setOwnPostedJobs(snapshot.ownPostedJobs);
@@ -910,6 +916,33 @@ export default function ProfileScreen() {
         </View>
       </View>
 
+      <View style={styles.devCard}>
+        <Text style={styles.devSectionTitle}>Dev — Active User</Text>
+        <View style={styles.devUserRow}>
+          {DEV_USERS.map((u) => (
+            <Pressable
+              key={u.id}
+              style={[styles.devUserButton, activeUser.id === u.id && styles.devUserButtonActive]}
+              onPress={async () => { await switchUser(u.id); loadProfileData(); }}
+            >
+              <Text style={[styles.devUserButtonText, activeUser.id === u.id && styles.devUserButtonTextActive]}>
+                {u.label}
+              </Text>
+              <Text style={styles.devUserButtonSub}>{u.name} · {u.role}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <View style={styles.devDebugPanel}>
+          <Text style={styles.devSectionTitle}>Job State ({allJobs.length})</Text>
+          {allJobs.map((job) => (
+            <Text key={job.id} style={styles.devLine}>
+              [{job.status}] {job.problem.slice(0, 32)}{job.requesterId === activeUser.id ? ' (owner)' : ''}
+            </Text>
+          ))}
+          {allJobs.length === 0 && <Text style={styles.devLine}>No jobs</Text>}
+        </View>
+      </View>
+
       </>)}
 
     </ScrollView>
@@ -1725,5 +1758,63 @@ const styles = StyleSheet.create({
   rebookBuddyChipText: {
     ...typography.meta,
     color: colors.secondary,
+  },
+  devCard: {
+    backgroundColor: '#1a1a2e',
+    borderRadius: layout.borderRadiusMedium,
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: '#333366',
+  },
+  devSectionTitle: {
+    ...typography.metaStrong,
+    color: '#a0a0cc',
+    marginBottom: spacing.sm,
+  },
+  devUserRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  devUserButton: {
+    flex: 1,
+    backgroundColor: '#2a2a4a',
+    borderRadius: layout.borderRadiusSmall,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#444477',
+  },
+  devUserButtonActive: {
+    backgroundColor: '#4444aa',
+    borderColor: '#8888ff',
+  },
+  devUserButtonText: {
+    ...typography.metaStrong,
+    color: '#a0a0cc',
+  },
+  devUserButtonTextActive: {
+    color: '#ffffff',
+  },
+  devUserButtonSub: {
+    ...typography.meta,
+    color: '#666699',
+    marginTop: 2,
+    textAlign: 'center',
+  },
+  devDebugPanel: {
+    backgroundColor: '#111122',
+    borderRadius: layout.borderRadiusSmall,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: '#222244',
+  },
+  devLine: {
+    ...typography.meta,
+    color: '#7777aa',
+    fontFamily: 'monospace',
+    lineHeight: 18,
   },
 });
