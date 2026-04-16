@@ -507,6 +507,11 @@ export default function ChatScreen() {
           <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
             {jobContext.problem || getChatTitle()}
           </Text>
+          {jobStatus === 'issue_reported' && (
+            <Text style={[styles.headerStatusHint, styles.headerStatusHintIssue]}>
+              {i18n.t('chat.status_issue_reported_title')} · {i18n.t('chat.status_issue_reported_subtitle')}
+            </Text>
+          )}
           {jobStatus === 'cancelled' && (
             <Text style={styles.headerStatusHint}>{i18n.t('chat.status_cancelled_subtitle')}</Text>
           )}
@@ -654,7 +659,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
-    height: 116,
+    minHeight: 116,
     marginHorizontal: layout.screenPaddingX,
     marginTop: spacing.md,
     marginBottom: spacing.xs,
@@ -683,6 +688,9 @@ const styles = StyleSheet.create({
     ...typography.meta,
     color: colors.textSecondary,
     marginBottom: spacing.xs,
+  },
+  headerStatusHintIssue: {
+    color: colors.red,
   },
   detailsButton: {
     alignSelf: 'flex-start',

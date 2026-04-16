@@ -12,19 +12,22 @@ export type TimeMode = 'sofort' | 'flexibel' | 'termin';
 /**
  * Canonical job lifecycle statuses.
  *
- * open       — posted, publicly visible, accepting applicants (pending applications
- *              do not move the job out of open — the applications array tracks them)
- * matched    — owner accepted exactly one applicant; job removed from public feed;
- *              chat unlocked for owner + accepted buddy; payment authorization started
- * active     — job execution in progress; payment confirmed
- * completed  — done; payment release pending; reviews available
- * cancelled  — stopped by either party; no further actions
- * expired    — timed out without a match; no further applications accepted
+ * open           — posted, publicly visible, accepting applicants (pending applications
+ *                  do not move the job out of open — the applications array tracks them)
+ * matched        — owner accepted exactly one applicant; job removed from public feed;
+ *                  chat unlocked for owner + accepted buddy; payment authorization started
+ * active         — job execution in progress; payment confirmed
+ * issue_reported — problem reported by either party during matched/active; payment frozen;
+ *                  normal completion path blocked; awaiting support review or cancellation
+ * completed      — done; payment release pending; reviews available
+ * cancelled      — stopped by either party; no further actions
+ * expired        — timed out without a match; no further applications accepted
  */
 export type JobStatus =
   | 'open'
   | 'matched'
   | 'active'
+  | 'issue_reported'
   | 'completed'
   | 'cancelled'
   | 'expired';
@@ -91,6 +94,7 @@ export type JobMarketSignals = {
 export const ACTIVE_JOB_STATUSES: JobStatus[] = [
   'matched',
   'active',
+  'issue_reported',
 ];
 
 export const isActiveJobStatus = (status: JobStatus): boolean => {
@@ -165,6 +169,7 @@ export type Job = {
 const MATCH_CONFIRMED_STATUSES: JobStatus[] = [
   'matched',
   'active',
+  'issue_reported',
   'cancelled',
   'completed',
 ];
@@ -182,7 +187,7 @@ export const hasRequesterAcceptedMatch = (
 export const isChatAccessibleForJob = (
   job: Partial<Pick<Job, 'status' | 'match'>>
 ): boolean => {
-  return job.status === 'matched' || job.status === 'active';
+  return job.status === 'matched' || job.status === 'active' || job.status === 'issue_reported';
 };
 
 /**

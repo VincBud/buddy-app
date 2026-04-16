@@ -827,12 +827,37 @@ export default function JobDetailScreen() {
     );
   };
 
+  // ─── Issue banner ────────────────────────────────────────────────────────
+
+  const renderIssueBanner = (currentJob: Job) => {
+    if (currentJob.status !== 'issue_reported') return null;
+    const summary = currentJob.issueSummary;
+    return (
+      <View style={styles.issueBanner}>
+        <Text style={styles.issueBannerTitle}>
+          {isEnglish ? '⚠ Issue reported' : '⚠ Problem gemeldet'}
+        </Text>
+        <Text style={styles.issueBannerSubtitle}>
+          {isEnglish
+            ? 'This job is under review. Completion and payment are paused.'
+            : 'Dieser Auftrag wird geprüft. Abschluss und Zahlung sind pausiert.'}
+        </Text>
+        {summary?.reason && (
+          <Text style={styles.issueBannerReason}>
+            {i18n.t(`chat.report_reason_${summary.reason}`)}
+          </Text>
+        )}
+      </View>
+    );
+  };
+
   // ─── Owner detail path ───────────────────────────────────────────────────
 
   const renderOwnerDetail = (currentJob: Job) => (
     <>
       <ScrollView {...scrollProps}>
         {renderHeader(currentJob)}
+        {renderIssueBanner(currentJob)}
         {renderHeroCard(currentJob, false)}
         {renderDescriptionCard(currentJob)}
 
@@ -872,15 +897,15 @@ export default function JobDetailScreen() {
           <Pressable
             style={[
               styles.ownerExtendButton,
-              !canExtendJob(currentJob) && styles.ownerExtendButtonDisabled,
+              (!canExtendJob(currentJob) || currentJob.status === 'issue_reported') && styles.ownerExtendButtonDisabled,
             ]}
             onPress={() => {
-              if (canExtendJob(currentJob)) {
+              if (canExtendJob(currentJob) && currentJob.status !== 'issue_reported') {
                 setSelectedDurationMs(EXTEND_OPTIONS[1].ms);
                 setIsExtendModalVisible(true);
               }
             }}
-            disabled={!canExtendJob(currentJob)}
+            disabled={!canExtendJob(currentJob) || currentJob.status === 'issue_reported'}
           >
             <Text style={[
               styles.ownerExtendButtonText,
@@ -985,6 +1010,7 @@ export default function JobDetailScreen() {
   const renderMarketplaceDetail = (currentJob: Job) => (
     <ScrollView {...scrollProps}>
       {renderHeader(currentJob)}
+      {renderIssueBanner(currentJob)}
       {renderHeroCard(currentJob, true)}
       {renderDescriptionCard(currentJob)}
 
@@ -1623,5 +1649,28 @@ const styles = StyleSheet.create({
     ...typography.meta,
     color: colors.placeholder,
     marginLeft: spacing.xs,
+  },
+  issueBanner: {
+    backgroundColor: colors.lightOrange,
+    borderRadius: layout.borderRadiusMedium,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 64, 0, 0.25)',
+    padding: spacing.lg,
+    marginBottom: spacing.lg,
+  },
+  issueBannerTitle: {
+    ...typography.bodyStrong,
+    color: colors.red,
+    marginBottom: spacing.xs,
+  },
+  issueBannerSubtitle: {
+    ...typography.meta,
+    color: colors.textSecondary,
+    lineHeight: 18,
+  },
+  issueBannerReason: {
+    ...typography.meta,
+    color: colors.textSecondary,
+    marginTop: spacing.xs,
   },
 });

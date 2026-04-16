@@ -149,6 +149,7 @@ export default function ChatDetailsScreen() {
   const hasStrongTrust = (averageRating ?? 0) >= 4.7 && reviewCount >= 5;
   const jobStatus: JobStatus = job?.status ?? 'open';
   const isCancelled = jobStatus === 'cancelled';
+  const isIssueReported = jobStatus === 'issue_reported';
 
   const clearReportForm = () => {
     setReportReason(null);
@@ -162,8 +163,15 @@ export default function ChatDetailsScreen() {
     setCancelFlowStep('select');
   };
 
-  const getStatusInfo = (): { title: string; subtitle: string } | null => {
-    if (jobStatus === 'cancelled') {
+  const getStatusInfo = (): { title: string; subtitle: string; variant?: 'issue' } | null => {
+    if (isIssueReported) {
+      return {
+        title: i18n.t('chat.status_issue_reported_title'),
+        subtitle: i18n.t('chat.status_issue_reported_subtitle'),
+        variant: 'issue',
+      };
+    }
+    if (isCancelled) {
       return {
         title: i18n.t('chat.status_cancelled_title'),
         subtitle: i18n.t('chat.status_cancelled_subtitle'),
@@ -273,9 +281,16 @@ export default function ChatDetailsScreen() {
         showsVerticalScrollIndicator={false}
       >
         {statusInfo && (
-          <View style={styles.statusCard}>
-            <Text style={styles.statusTitle}>{statusInfo.title}</Text>
+          <View style={[styles.statusCard, statusInfo.variant === 'issue' && styles.statusCardIssue]}>
+            <Text style={[styles.statusTitle, statusInfo.variant === 'issue' && styles.statusTitleIssue]}>
+              {statusInfo.title}
+            </Text>
             <Text style={styles.statusSubtitle}>{statusInfo.subtitle}</Text>
+            {statusInfo.variant === 'issue' && job?.issueSummary?.reason && (
+              <Text style={styles.statusSubtitle}>
+                {i18n.t(`chat.report_reason_${job.issueSummary.reason}`)}
+              </Text>
+            )}
           </View>
         )}
 
@@ -392,9 +407,11 @@ export default function ChatDetailsScreen() {
           <Pressable
             style={({ pressed }) => [
               styles.secondaryActionButton,
-              pressed && styles.actionButtonPressed,
+              (isCancelled || isIssueReported) && styles.actionButtonDisabled,
+              pressed && !(isCancelled || isIssueReported) && styles.actionButtonPressed,
             ]}
             onPress={handleReportIssue}
+            disabled={isCancelled || isIssueReported}
             hitSlop={6}
           >
             <Text style={styles.tertiaryActionText}>{i18n.t('chat.report_issue')}</Text>
@@ -710,6 +727,13 @@ const styles = StyleSheet.create({
     ...typography.metaStrong,
     color: colors.secondary,
     marginBottom: 2,
+  },
+  statusTitleIssue: {
+    color: colors.red,
+  },
+  statusCardIssue: {
+    backgroundColor: colors.lightOrange,
+    borderColor: 'rgba(255, 64, 0, 0.25)',
   },
   statusSubtitle: {
     ...typography.meta,

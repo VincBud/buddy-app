@@ -108,7 +108,11 @@ export const reportJobIssue = async (params: {
   const previousStatus = targetJob.status;
 
   const resultingStatus: JobStatus =
-    previousStatus === 'completed' ? 'completed' : 'cancelled';
+    previousStatus === 'completed'
+      ? 'completed'
+      : isActiveJobStatus(previousStatus)
+      ? 'issue_reported'
+      : 'cancelled';
 
   const updatedJob: Job = {
     ...targetJob,

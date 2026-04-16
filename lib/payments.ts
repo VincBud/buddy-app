@@ -73,6 +73,7 @@ type PaymentJobStatus =
   | 'open'
   | 'matched'
   | 'active'
+  | 'issue_reported'
   | 'completed'
   | 'cancelled'
   | 'expired';
@@ -203,6 +204,12 @@ export const applyPaymentStateForJobStatus = (
       authorizedAt: payment.authorizedAt ?? now,
       updatedAt: now,
     };
+  }
+
+  // Issue reported — freeze payment in current state; do not advance toward payout or refund.
+  // Resolution (payout, refund, or cancellation) happens after support review.
+  if (nextStatus === 'issue_reported') {
+    return { ...payment, updatedAt: now };
   }
 
   // Job completed → payout queued; backend releases funds after confirmation
