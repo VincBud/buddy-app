@@ -285,13 +285,16 @@ export default function JobDetailScreen() {
   ): string | null => {
     if (forRequester) {
       if (status === 'pending_authorization') return i18n.t('job.payment_status_securing');
-      if (status === 'reserved' || status === 'paid') return i18n.t('job.payment_status_secured');
+      if (status === 'reserved') return i18n.t('job.payment_status_secured');
       if (status === 'release_pending') return i18n.t('job.payment_status_release_pending');
+      if (status === 'paid') return i18n.t('job.payment_status_paid');
       return null;
     }
     // Buddy view
-    if (status === 'reserved' || status === 'paid') return i18n.t('job.payout_status_secured');
+    if (status === 'pending_authorization') return i18n.t('job.payout_status_pending_auth');
+    if (status === 'reserved') return i18n.t('job.payout_status_secured');
     if (status === 'release_pending') return i18n.t('job.payout_status_release_pending');
+    if (status === 'paid') return i18n.t('job.payout_status_paid');
     return null;
   };
 

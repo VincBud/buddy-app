@@ -5,28 +5,48 @@ import {
     PriceBreakdown,
 } from './pricing';
 
+/**
+ * Payment lifecycle for a single job escrow.
+ *
+ * none                 — initial; no payment action started yet
+ * pending_authorization — owner accepted a buddy; payment authorization requested
+ * reserved             — funds secured/escrowed; buddy payout guaranteed on completion
+ * release_pending      — job completed; payout queued for release to buddy
+ * paid                 — payout released to buddy; platform fee settled
+ * cancelled            — payment voided; refund issued if funds were reserved
+ */
 export type PaymentStatus =
-  | 'unpaid'
-  | 'pending'
+  | 'none'
   | 'pending_authorization'
   | 'reserved'
-  | 'paid'
   | 'release_pending'
-  | 'released'
-  | 'refunded'
-  | 'partially_refunded'
-  | 'failed'
+  | 'paid'
   | 'cancelled';
 
+/**
+ * Buddy payout lifecycle, tracked in parallel with PaymentStatus.
+ *
+ * not_ready — initial; payout not yet committed
+ * reserved  — earnings secured in escrow (job matched)
+ * pending   — release triggered; processing
+ * paid      — payout sent to buddy
+ * cancelled — payout voided (job cancelled/dispute)
+ */
 export type PayoutStatus =
   | 'not_ready'
-  | 'on_hold'
+  | 'reserved'
   | 'pending'
-  | 'scheduled'
   | 'paid'
-  | 'failed';
+  | 'cancelled';
 
-export type RefundStatus = 'none' | 'pending' | 'partial' | 'full' | 'failed';
+/**
+ * Refund state for the requester when a job is cancelled after payment.
+ *
+ * none      — no refund needed
+ * pending   — refund initiated; awaiting confirmation
+ * processed — refund settled
+ */
+export type RefundStatus = 'none' | 'pending' | 'processed';
 
 export type PaymentActorRole = 'auftraggeber' | 'buddy' | 'platform';
 
@@ -104,7 +124,7 @@ export const createInitialPaymentState = (breakdown: PriceBreakdown): JobPayment
     requesterPays: breakdown.totalPrice,
     buddyEarnings: breakdown.basePrice,
     platformKeeps: breakdown.platformFee,
-    paymentStatus: 'unpaid',
+    paymentStatus: 'none',
     payoutStatus: 'not_ready',
     refundStatus: 'none',
     payerRole: 'auftraggeber',
@@ -147,79 +167,71 @@ export const applyPaymentStateForJobStatus = (
 ): JobPaymentState => {
   const now = nowIso();
 
+  // Job re-opened or still open — no payment action yet
   if (nextStatus === 'open') {
     return {
       ...payment,
-      paymentStatus: 'unpaid',
+      paymentStatus: 'none',
       payoutStatus: 'not_ready',
       updatedAt: now,
     };
   }
 
-  // Requester confirms match → request authorization (not yet reserved)
+  // Owner accepted one buddy → request authorization; buddy earnings are reserved
   if (nextStatus === 'matched') {
     return {
       ...payment,
       paymentStatus:
-        payment.paymentStatus === 'unpaid' ? 'pending_authorization' : payment.paymentStatus,
+        payment.paymentStatus === 'none' ? 'pending_authorization' : payment.paymentStatus,
       payoutStatus:
-        payment.payoutStatus === 'not_ready' ? 'scheduled' : payment.payoutStatus,
+        payment.payoutStatus === 'not_ready' ? 'reserved' : payment.payoutStatus,
       updatedAt: now,
     };
   }
 
-  // Authorization confirmed → payment reserved, job becomes active
+  // Payment confirmed → funds secured in escrow; job execution begins
   if (nextStatus === 'active') {
-    const isAlreadyReserved =
+    const alreadyReserved =
       payment.paymentStatus === 'reserved' ||
-      payment.paymentStatus === 'paid' ||
-      payment.paymentStatus === 'release_pending' ||
-      payment.paymentStatus === 'released';
+      payment.paymentStatus === 'release_pending';
 
     return {
       ...payment,
-      paymentStatus: isAlreadyReserved ? payment.paymentStatus : 'reserved',
-      payoutStatus:
-        payment.payoutStatus === 'not_ready' ? 'scheduled' : payment.payoutStatus,
+      paymentStatus: alreadyReserved ? payment.paymentStatus : 'reserved',
+      payoutStatus: payment.payoutStatus === 'not_ready' ? 'reserved' : payment.payoutStatus,
       reservedAt: payment.reservedAt ?? now,
       authorizedAt: payment.authorizedAt ?? now,
       updatedAt: now,
     };
   }
 
+  // Job completed → payout queued; backend releases funds after confirmation
   if (nextStatus === 'completed') {
     return {
       ...payment,
       paymentStatus: 'release_pending',
       payoutStatus: 'pending',
       refundStatus: 'none',
-      releasedAt: now,
       updatedAt: now,
     };
   }
 
-  if (nextStatus === 'cancelled') {
+  // Cancellation — void payment; trigger refund only if funds were already reserved
+  if (nextStatus === 'cancelled' || nextStatus === 'expired') {
     const needsRefund =
       payment.paymentStatus === 'pending_authorization' ||
-      payment.paymentStatus === 'reserved' ||
-      payment.paymentStatus === 'paid' ||
-      payment.paymentStatus === 'release_pending' ||
-      payment.paymentStatus === 'released' ||
-      payment.paymentStatus === 'pending';
+      payment.paymentStatus === 'reserved';
 
     return {
       ...payment,
       paymentStatus: 'cancelled',
-      payoutStatus: 'not_ready',
+      payoutStatus: 'cancelled',
       refundStatus: needsRefund ? 'pending' : 'none',
       updatedAt: now,
     };
   }
 
-  return {
-    ...payment,
-    updatedAt: now,
-  };
+  return { ...payment, updatedAt: now };
 };
 
 export const getJobPaymentBreakdown = (job: JobPricingShape): PriceBreakdown => {
@@ -235,8 +247,7 @@ export const formatPriceLine = (value: number): string => `${formatPriceAmount(v
 export const isPaymentReadyForActivation = (payment: JobPaymentState): boolean => {
   return (
     payment.paymentStatus === 'pending_authorization' ||
-    payment.paymentStatus === 'reserved' ||
-    payment.paymentStatus === 'paid'
+    payment.paymentStatus === 'reserved'
   );
 };
 
@@ -253,5 +264,23 @@ export const confirmPaymentReservation = (payment: JobPaymentState): JobPaymentS
     reservedAt: payment.reservedAt ?? nowIso(),
     authorizedAt: payment.authorizedAt ?? nowIso(),
     updatedAt: nowIso(),
+  };
+};
+
+/**
+ * Releases escrowed payment to buddy after job completion.
+ * In production this is triggered by a server-side webhook after confirmation.
+ * Only valid from release_pending state.
+ */
+export const releasePaymentToBuddy = (payment: JobPaymentState): JobPaymentState => {
+  if (payment.paymentStatus !== 'release_pending') return payment;
+
+  const now = nowIso();
+  return {
+    ...payment,
+    paymentStatus: 'paid',
+    payoutStatus: 'paid',
+    paidAt: payment.paidAt ?? now,
+    updatedAt: now,
   };
 };

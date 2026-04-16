@@ -139,7 +139,7 @@ export const reportJobIssue = async (params: {
     createdAt: getNowIso(),
     previousStatus,
     resultingStatus,
-    paymentStatus: updatedJob.payment?.paymentStatus ?? 'unpaid',
+    paymentStatus: updatedJob.payment?.paymentStatus ?? 'none',
     payoutStatus: updatedJob.payment?.payoutStatus ?? 'not_ready',
     refundStatus: updatedJob.payment?.refundStatus ?? 'none',
   };
@@ -427,7 +427,7 @@ export const cancelJob = async (params: {
     createdAt: getNowIso(),
     previousStatus,
     resultingStatus,
-    paymentStatus: updatedJob.payment?.paymentStatus ?? 'unpaid',
+    paymentStatus: updatedJob.payment?.paymentStatus ?? 'none',
     payoutStatus: updatedJob.payment?.payoutStatus ?? 'not_ready',
     refundStatus: updatedJob.payment?.refundStatus ?? 'none',
   };
