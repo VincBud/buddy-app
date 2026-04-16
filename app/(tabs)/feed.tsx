@@ -142,7 +142,7 @@ export default function FeedScreen() {
       const parsedRadius = loadedUserPreferences.radius;
 
       const filteredOpenJobs = safeJobs.filter((job: Job) => {
-        // Include open, applied, and reviewing — all pre-match states accept new applicants
+        // Only 'open' jobs appear in the public feed; matched/active/completed/cancelled/expired do not
         if (!isJobOpenForApplications(job.status)) return false;
         if (job.requesterId === LOCAL_USER_ID) return false;
         // Exclude jobs the local buddy has already applied to

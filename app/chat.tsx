@@ -3,15 +3,15 @@ import * as ImagePicker from 'expo-image-picker';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
-    Image,
-    KeyboardAvoidingView,
-    Platform,
-    Pressable,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    View,
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
 } from 'react-native';
 import { colors } from '../lib/colors';
 import i18n, { useLanguage } from '../lib/i18n';
@@ -90,7 +90,7 @@ const buildChatContextFromParams = (
     problem: params.problem || '',
     price: params.price || '',
     creatorName: params.creatorName || '',
-    status: 'accepted',
+    status: 'matched',
   };
 };
 
@@ -480,7 +480,7 @@ export default function ChatScreen() {
   const hasChatAccess = isJobChatAccessible(currentJob ?? { status: jobStatus });
   const isChatWritable = hasChatAccess && isJobChatWritable(jobStatus);
   const canSend = input.trim().length > 0 && isChatWritable;
-  const showCompletionCta = hasChatAccess && (jobStatus === 'accepted' || jobStatus === 'active' || jobStatus === 'matched');
+  const showCompletionCta = hasChatAccess && (jobStatus === 'matched' || jobStatus === 'active');
 
   return (
     <>
@@ -507,9 +507,6 @@ export default function ChatScreen() {
           <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
             {jobContext.problem || getChatTitle()}
           </Text>
-          {jobStatus === 'issue_reported' && (
-            <Text style={styles.headerStatusHint}>{i18n.t('chat.status_issue_reported_subtitle')}</Text>
-          )}
           {jobStatus === 'cancelled' && (
             <Text style={styles.headerStatusHint}>{i18n.t('chat.status_cancelled_subtitle')}</Text>
           )}

@@ -148,7 +148,6 @@ export default function ChatDetailsScreen() {
   const contactReliability = getReliabilitySignal({ completedJobs: reviewCount });
   const hasStrongTrust = (averageRating ?? 0) >= 4.7 && reviewCount >= 5;
   const jobStatus: JobStatus = job?.status ?? 'open';
-  const isIssueReported = jobStatus === 'issue_reported';
   const isCancelled = jobStatus === 'cancelled';
 
   const clearReportForm = () => {
@@ -164,13 +163,6 @@ export default function ChatDetailsScreen() {
   };
 
   const getStatusInfo = (): { title: string; subtitle: string } | null => {
-    if (jobStatus === 'issue_reported') {
-      return {
-        title: i18n.t('chat.status_issue_reported_title'),
-        subtitle: i18n.t('chat.status_issue_reported_subtitle'),
-      };
-    }
-
     if (jobStatus === 'cancelled') {
       return {
         title: i18n.t('chat.status_cancelled_title'),

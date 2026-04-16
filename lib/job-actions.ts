@@ -6,6 +6,7 @@ import {
     JobStatus,
     isActiveJobStatus,
     isChatAccessibleForJob,
+    isJobOpenForApplications,
 } from './jobs';
 import {
   applyPaymentStateForJobStatus,
@@ -107,9 +108,7 @@ export const reportJobIssue = async (params: {
   const previousStatus = targetJob.status;
 
   const resultingStatus: JobStatus =
-    previousStatus === 'cancelled' || previousStatus === 'completed'
-      ? previousStatus
-      : 'issue_reported';
+    previousStatus === 'completed' ? 'completed' : 'cancelled';
 
   const updatedJob: Job = {
     ...targetJob,
@@ -165,7 +164,7 @@ export const requestJobApplication = async (params: {
   const targetJob = jobs[targetIndex];
   const previousStatus = targetJob.status;
 
-  if (previousStatus !== 'open' && previousStatus !== 'applied' && previousStatus !== 'reviewing') {
+  if (!isJobOpenForApplications(previousStatus)) {
     return { updatedJob: targetJob, resultingStatus: previousStatus };
   }
 
@@ -176,7 +175,8 @@ export const requestJobApplication = async (params: {
     return { updatedJob: targetJob, resultingStatus: previousStatus };
   }
 
-  const resultingStatus: JobStatus = 'applied';
+  // Job stays 'open' while applications are pending — the applications array tracks them
+  const resultingStatus: JobStatus = 'open';
   const now = getNowIso();
   const newApplication: JobApplicationState = {
     buddyId: params.applicant.buddyId,
@@ -198,7 +198,6 @@ export const requestJobApplication = async (params: {
       resultingStatus
     ),
     match: {
-      state: 'buddy_requested',
       applications: [...existingApplications, newApplication],
       selectedApplicationId: targetJob.match?.selectedApplicationId,
     },
@@ -241,18 +240,17 @@ export const reviewJobApplication = async (params: {
     );
     const waitingJob: Job = {
       ...targetJob,
-      status: 'reviewing',
-      payment: applyPaymentStateForJobStatus(ensureJobPaymentState(targetJob), 'reviewing'),
+      status: 'open',
+      payment: applyPaymentStateForJobStatus(ensureJobPaymentState(targetJob), 'open'),
       match: {
-        ...targetJob.match,
-        state: 'requester_reviewing',
         applications: updatedApplications,
+        selectedApplicationId: targetJob.match?.selectedApplicationId,
       },
     };
     const nextJobs = [...jobs];
     nextJobs[targetIndex] = waitingJob;
     await AsyncStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(nextJobs));
-    return { updatedJob: waitingJob, resultingStatus: 'reviewing' };
+    return { updatedJob: waitingJob, resultingStatus: 'open' };
   }
 
   if (params.decision === 'decline') {
@@ -267,15 +265,13 @@ export const reviewJobApplication = async (params: {
           }
         : a
     );
-    const remainingPending = updatedApplications.some((a) => a.requesterDecision === 'pending');
-    const resultingStatus: JobStatus = remainingPending ? 'applied' : 'open';
+    // Job always returns to 'open' on decline — it remains publicly visible while pending applicants exist
+    const resultingStatus: JobStatus = 'open';
     const declinedJob: Job = {
       ...targetJob,
       status: resultingStatus,
       payment: applyPaymentStateForJobStatus(ensureJobPaymentState(targetJob), resultingStatus),
       match: {
-        ...targetJob.match,
-        state: remainingPending ? 'buddy_requested' : 'available',
         applications: updatedApplications,
         selectedApplicationId: targetJob.match?.selectedApplicationId,
       },
@@ -314,8 +310,6 @@ export const reviewJobApplication = async (params: {
     status: acceptedStatus,
     payment: applyPaymentStateForJobStatus(ensureJobPaymentState(targetJob), acceptedStatus),
     match: {
-      ...targetJob.match,
-      state: 'matched',
       applications: updatedApplications,
       selectedApplicationId: params.buddyId,
     },
@@ -344,7 +338,7 @@ export const activateMatchedJob = async (params: {
     return { updatedJob: targetJob, resultingStatus: targetJob.status };
   }
 
-  if (targetJob.status === 'active' || targetJob.status === 'accepted') {
+  if (targetJob.status === 'active') {
     return { updatedJob: targetJob, resultingStatus: targetJob.status };
   }
 
@@ -364,8 +358,6 @@ export const activateMatchedJob = async (params: {
     status: 'active',
     payment: applyPaymentStateForJobStatus(confirmedPayment, 'active'),
     match: {
-      ...targetJob.match,
-      state: 'active',
       applications: (targetJob.match?.applications ?? []).map((a) =>
         a.buddyId === targetJob.match?.selectedApplicationId
           ? {
@@ -375,6 +367,7 @@ export const activateMatchedJob = async (params: {
             }
           : a
       ),
+      selectedApplicationId: targetJob.match?.selectedApplicationId,
     },
   };
 

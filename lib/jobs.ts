@@ -9,18 +9,25 @@ export const LOCAL_USER_ID = 'local_user';
 
 export type TimeMode = 'sofort' | 'flexibel' | 'termin';
 
+/**
+ * Canonical job lifecycle statuses.
+ *
+ * open       — posted, publicly visible, accepting applicants (pending applications
+ *              do not move the job out of open — the applications array tracks them)
+ * matched    — owner accepted exactly one applicant; job removed from public feed;
+ *              chat unlocked for owner + accepted buddy; payment authorization started
+ * active     — job execution in progress; payment confirmed
+ * completed  — done; payment release pending; reviews available
+ * cancelled  — stopped by either party; no further actions
+ * expired    — timed out without a match; no further applications accepted
+ */
 export type JobStatus =
   | 'open'
-  | 'applied'
-  | 'reviewing'
   | 'matched'
   | 'active'
-  | 'accepted'
-  | 'issue_reported'
-  | 'cancel_requested'
+  | 'completed'
   | 'cancelled'
-  | 'expired'
-  | 'completed';
+  | 'expired';
 
 export type JobParticipantRole = 'auftraggeber' | 'buddy';
 
@@ -60,7 +67,6 @@ export type JobApplicationState = {
 };
 
 export type JobMatchState = {
-  state: 'available' | 'buddy_requested' | 'requester_reviewing' | 'matched' | 'active';
   applications: JobApplicationState[];
   selectedApplicationId?: string;
 };
@@ -83,11 +89,8 @@ export type JobMarketSignals = {
 };
 
 export const ACTIVE_JOB_STATUSES: JobStatus[] = [
-  'accepted',
   'matched',
   'active',
-  'issue_reported',
-  'cancel_requested',
 ];
 
 export const isActiveJobStatus = (status: JobStatus): boolean => {
@@ -161,10 +164,7 @@ export type Job = {
 
 const MATCH_CONFIRMED_STATUSES: JobStatus[] = [
   'matched',
-  'accepted',
   'active',
-  'issue_reported',
-  'cancel_requested',
   'cancelled',
   'completed',
 ];
@@ -182,7 +182,7 @@ export const hasRequesterAcceptedMatch = (
 export const isChatAccessibleForJob = (
   job: Partial<Pick<Job, 'status' | 'match'>>
 ): boolean => {
-  return hasRequesterAcceptedMatch(job);
+  return job.status === 'matched' || job.status === 'active';
 };
 
 /**
@@ -198,11 +198,11 @@ export const isChatAccessibleForBuddy = (
 };
 
 /**
- * Returns true if a job is still open to new applications (no applicant accepted yet).
- * Covers open, applied, and reviewing — all pre-match states.
+ * Returns true if a job is still open to new applications.
+ * Only 'open' jobs accept new applicants — pending applications do not change this status.
  */
 export const isJobOpenForApplications = (status: JobStatus): boolean => {
-  return status === 'open' || status === 'applied' || status === 'reviewing';
+  return status === 'open';
 };
 
 export const getSafeJobPriceNumber = (job: Pick<Job, 'price'>): number => {

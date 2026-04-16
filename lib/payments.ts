@@ -51,16 +51,11 @@ export type JobPaymentState = {
 
 type PaymentJobStatus =
   | 'open'
-  | 'applied'
-  | 'reviewing'
   | 'matched'
   | 'active'
-  | 'accepted'
-  | 'issue_reported'
-  | 'cancel_requested'
+  | 'completed'
   | 'cancelled'
-  | 'expired'
-  | 'completed';
+  | 'expired';
 
 type JobPricingShape = {
   price?: unknown;
@@ -152,7 +147,7 @@ export const applyPaymentStateForJobStatus = (
 ): JobPaymentState => {
   const now = nowIso();
 
-  if (nextStatus === 'applied' || nextStatus === 'reviewing' || nextStatus === 'open') {
+  if (nextStatus === 'open') {
     return {
       ...payment,
       paymentStatus: 'unpaid',
@@ -174,7 +169,7 @@ export const applyPaymentStateForJobStatus = (
   }
 
   // Authorization confirmed → payment reserved, job becomes active
-  if (nextStatus === 'accepted' || nextStatus === 'active') {
+  if (nextStatus === 'active') {
     const isAlreadyReserved =
       payment.paymentStatus === 'reserved' ||
       payment.paymentStatus === 'paid' ||
@@ -188,16 +183,6 @@ export const applyPaymentStateForJobStatus = (
         payment.payoutStatus === 'not_ready' ? 'scheduled' : payment.payoutStatus,
       reservedAt: payment.reservedAt ?? now,
       authorizedAt: payment.authorizedAt ?? now,
-      updatedAt: now,
-    };
-  }
-
-  if (nextStatus === 'issue_reported' || nextStatus === 'cancel_requested') {
-    return {
-      ...payment,
-      payoutStatus: 'on_hold',
-      paymentStatus:
-        payment.paymentStatus === 'unpaid' ? 'pending' : payment.paymentStatus,
       updatedAt: now,
     };
   }
