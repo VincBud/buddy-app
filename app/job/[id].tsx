@@ -20,6 +20,7 @@ import {
     extendJobExpiry,
     getBuddyPointsForJob,
     getRemainingExtensions,
+    isJobOpenForApplications,
     Job,
     JobApplicationState,
     LOCAL_USER_ID,
@@ -94,6 +95,15 @@ export default function JobDetailScreen() {
   const [isCancelConfirmVisible, setIsCancelConfirmVisible] = useState(false);
   const [isReviewingApplication, setIsReviewingApplication] = useState(false);
   const isEnglish = String(i18n.locale).toLowerCase().startsWith('en');
+
+  // The stable ID for the local buddy (non-owner) in this mock setup
+  const LOCAL_BUDDY_ID = 'buddy_local';
+
+  // The local buddy's own application on this job, if any
+  const localApplication = useMemo(() => {
+    if (!job) return null;
+    return job.match?.applications?.find((a) => a.buddyId === LOCAL_BUDDY_ID) ?? null;
+  }, [job]);
 
   const jobId = useMemo(() => {
     if (!params.id) return '';
@@ -226,34 +236,38 @@ export default function JobDetailScreen() {
   };
 
   const getAcceptCtaText = () => {
-    if (job?.status === 'applied' || job?.status === 'reviewing') {
-      return i18n.t('job.request_pending_button');
-    }
-
-    if (
-      job?.status === 'matched' ||
-      job?.status === 'accepted' ||
-      job?.status === 'active' ||
-      job?.status === 'issue_reported' ||
-      job?.status === 'cancel_requested' ||
-      job?.status === 'completed' ||
-      job?.status === 'cancelled'
-    ) {
+    if (localApplication?.requesterDecision === 'accepted') {
       return i18n.t('job.request_confirmed_button');
     }
-
+    if (localApplication?.requesterDecision === 'pending') {
+      return i18n.t('job.request_pending_button');
+    }
+    if (localApplication?.requesterDecision === 'declined') {
+      return isEnglish ? 'Request Declined' : 'Anfrage abgelehnt';
+    }
+    if (!isJobOpenForApplications(job?.status ?? 'open')) {
+      return i18n.t('job.request_confirmed_button');
+    }
     return i18n.t('job.accept_button');
   };
 
   const getAcceptHelperText = () => {
-    if (job?.status === 'applied' || job?.status === 'reviewing') {
+    if (localApplication?.requesterDecision === 'accepted') {
+      return isEnglish
+        ? 'Accepted — chat is now available'
+        : 'Angenommen — Chat ist jetzt verfügbar';
+    }
+    if (localApplication?.requesterDecision === 'declined') {
+      return isEnglish
+        ? 'Your request was not selected for this job'
+        : 'Deine Anfrage wurde für diesen Auftrag nicht ausgewählt';
+    }
+    if (localApplication?.requesterDecision === 'pending') {
       return i18n.t('job.request_pending_helper');
     }
-
     if (job?.status === 'matched') {
       return i18n.t('job.request_confirmed_helper');
     }
-
     return i18n.t('job.accept_helper');
   };
 
@@ -465,7 +479,8 @@ export default function JobDetailScreen() {
 
   const acceptJob = async () => {
     if (!job) return;
-    if (job.status !== 'open') return;
+    if (!isJobOpenForApplications(job.status)) return;
+    if (localApplication) return; // already applied — backend deduplicates too
 
     try {
       setIsAccepting(true);
@@ -989,7 +1004,7 @@ export default function JobDetailScreen() {
       <Pressable
         style={[styles.acceptButton, isAccepting && styles.acceptButtonDisabled]}
         onPress={acceptJob}
-        disabled={isAccepting || currentJob.status !== 'open'}
+        disabled={isAccepting || !!localApplication || !isJobOpenForApplications(currentJob.status)}
       >
         <Text style={styles.acceptButtonText}>
           {isAccepting ? i18n.t('job.accepting') : getAcceptCtaText()}

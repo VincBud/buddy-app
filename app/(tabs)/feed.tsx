@@ -13,6 +13,7 @@ import {
     getActiveOwnJobs,
     getBuddyPointsForJob,
     isActiveJobStatus,
+    isJobOpenForApplications,
     Job,
     JobCategory,
     LOCAL_USER_ID,
@@ -141,8 +142,11 @@ export default function FeedScreen() {
       const parsedRadius = loadedUserPreferences.radius;
 
       const filteredOpenJobs = safeJobs.filter((job: Job) => {
-        if (job.status !== 'open') return false;
+        // Include open, applied, and reviewing — all pre-match states accept new applicants
+        if (!isJobOpenForApplications(job.status)) return false;
         if (job.requesterId === LOCAL_USER_ID) return false;
+        // Exclude jobs the local buddy has already applied to
+        if (job.match?.applications?.some((a) => a.buddyId === 'buddy_local')) return false;
         if (!job.location) return true;
 
         return getDistance(
@@ -169,7 +173,15 @@ export default function FeedScreen() {
         return Number(b.id) - Number(a.id);
       });
 
-      const accepted = safeJobs.filter((job: Job) => isActiveJobStatus(job.status));
+      // Accepted tab: only jobs the local buddy is the selected applicant on,
+      // or jobs the local user owns that are now active (owner active flow is
+      // primarily in my-posted-jobs but we preserve it here for the buddy view).
+      const accepted = safeJobs.filter(
+        (job: Job) =>
+          isActiveJobStatus(job.status) &&
+          (job.requesterId === LOCAL_USER_ID ||
+            job.match?.selectedApplicationId === 'buddy_local')
+      );
       const archived = safeJobs.filter(
         (job: Job) => job.status === 'completed' || job.status === 'expired'
       );

@@ -185,6 +185,26 @@ export const isChatAccessibleForJob = (
   return hasRequesterAcceptedMatch(job);
 };
 
+/**
+ * Returns true only if the specific buddy is the one accepted applicant for this job.
+ * Use this on the non-owner (buddy) path to gate chat access.
+ */
+export const isChatAccessibleForBuddy = (
+  job: Partial<Pick<Job, 'status' | 'match'>>,
+  buddyId: string
+): boolean => {
+  if (!hasRequesterAcceptedMatch(job)) return false;
+  return job.match?.selectedApplicationId === buddyId;
+};
+
+/**
+ * Returns true if a job is still open to new applications (no applicant accepted yet).
+ * Covers open, applied, and reviewing — all pre-match states.
+ */
+export const isJobOpenForApplications = (status: JobStatus): boolean => {
+  return status === 'open' || status === 'applied' || status === 'reviewing';
+};
+
 export const getSafeJobPriceNumber = (job: Pick<Job, 'price'>): number => {
   const parsedPrice = parsePriceInput(job.price);
 
