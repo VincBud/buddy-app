@@ -26,6 +26,9 @@ export const STORAGE_KEYS = {
   JOB_ISSUE_REPORTS: 'jobIssueReports',
   JOB_CANCELLATIONS: 'jobCancellations',
 
+  // Reliability / trust stats (keyed per userId: `${key}_${userId}`)
+  USER_RELIABILITY_STATS: 'userReliabilityStats',
+
   // DEV ONLY — local user switcher
   DEV_ACTIVE_USER: 'dev_active_user',
 } as const;

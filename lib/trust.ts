@@ -55,3 +55,28 @@ export const getReliabilitySignal = ({
 
   return 'new';
 };
+
+// ─── Behavioral reliability stats ────────────────────────────────────────────
+
+export type UserReliabilityStats = {
+  completedJobs: number;
+  cancelledJobs: number;
+  issueCount: number;
+  acceptedJobsCount?: number; // buddy: jobs where they were selected
+  totalPostedJobs?: number;   // requester: total jobs created
+};
+
+/**
+ * Derive reliability status from full behavioral stats.
+ * This is the primary function going forward; getReliabilitySignal remains
+ * for backward-compat with response-rate only paths.
+ */
+export const getReliabilityStatus = (stats: UserReliabilityStats): ReliabilitySignal => {
+  const { completedJobs, cancelledJobs, issueCount } = stats;
+  const total = completedJobs + cancelledJobs;
+  const badRatio = total > 0 ? (cancelledJobs + issueCount) / (total + issueCount) : 0;
+
+  if (completedJobs >= 10 && badRatio < 0.1) return 'trusted';
+  if (completedJobs >= 3 && badRatio < 0.3) return 'steady';
+  return 'new';
+};

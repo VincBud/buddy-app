@@ -16,6 +16,7 @@ import {
   isPaymentReadyForActivation,
 } from './payments';
 import { STORAGE_KEYS } from './storage-keys';
+import { incrementReliabilityStats } from '../services/user.service';
 
 const JOBS_STORAGE_KEY = STORAGE_KEYS.JOBS;
 const JOB_ISSUE_REPORTS_STORAGE_KEY = STORAGE_KEYS.JOB_ISSUE_REPORTS;
@@ -94,6 +95,7 @@ const appendRecord = async <T>(storageKey: string, record: T): Promise<void> => 
 export const reportJobIssue = async (params: {
   jobId: string;
   reporterRole: JobParticipantRole;
+  reporterUserId?: string;
   reason: ReportIssueReasonKey;
   note?: string;
 }): Promise<{ updatedJob: Job | null; resultingStatus: JobStatus }> => {
@@ -150,6 +152,10 @@ export const reportJobIssue = async (params: {
   };
 
   await appendRecord(JOB_ISSUE_REPORTS_STORAGE_KEY, reportRecord);
+
+  if (params.reporterUserId) {
+    await incrementReliabilityStats(params.reporterUserId, 'issueCount');
+  }
 
   return { updatedJob, resultingStatus };
 };
@@ -288,6 +294,7 @@ export const reviewJobApplication = async (params: {
   }
 
   // accept: mark this applicant accepted, auto-decline all others
+  await incrementReliabilityStats(params.buddyId, 'acceptedJobsCount');
   const acceptedStatus: JobStatus = 'matched';
   const updatedApplications = existingApplications.map((a) => {
     if (a.buddyId === params.buddyId) {
@@ -386,6 +393,7 @@ export const activateMatchedJob = async (params: {
 export const cancelJob = async (params: {
   jobId: string;
   cancelledByRole: JobParticipantRole;
+  cancelledByUserId?: string;
   reason: CancelJobReasonKey;
   note?: string;
 }): Promise<{ updatedJob: Job | null; resultingStatus: JobStatus }> => {
@@ -438,6 +446,10 @@ export const cancelJob = async (params: {
   };
 
   await appendRecord(JOB_CANCELLATIONS_STORAGE_KEY, cancellationRecord);
+
+  if (params.cancelledByUserId) {
+    await incrementReliabilityStats(params.cancelledByUserId, 'cancelledJobs');
+  }
 
   return { updatedJob, resultingStatus };
 };

@@ -27,7 +27,8 @@ import {
     saveUserPreferences,
     UserPreferences,
 } from '../../lib/preferences';
-import { getInterestedBuddyCount, getJobViewsCount } from '../../lib/signals';
+import { getInterestedBuddyCount, getJobViewsCount, getRequesterReliability } from '../../lib/signals';
+import { incrementReliabilityStats } from '../../services/user.service';
 import { layout, spacing } from '../../lib/spacing';
 import { typography } from '../../lib/typography';
 import { recordJobCompletionEarning } from '../../lib/wallet';
@@ -226,6 +227,7 @@ export default function FeedScreen() {
       await AsyncStorage.setItem('jobs', JSON.stringify(updatedJobs));
       await AsyncStorage.setItem('buddyScore', updatedScore.toString());
       await recordJobCompletionEarning(job);
+      await incrementReliabilityStats(getActiveDevUserId(), 'completedJobs');
 
       const notification = createNotification(
         'jobCompleted',
@@ -610,6 +612,7 @@ export default function FeedScreen() {
     const creatorRating = getCreatorAverageRating(job);
     const creatorReviewCount = getCreatorReviewCount(job);
     const showTopBuddy = isTopBuddy(creatorRating, creatorReviewCount);
+    const creatorReliability = getRequesterReliability(job);
     const smartBadges = activeTab === 'offen' ? getSmartBadges(job) : [];
     const fileCount = job.media?.length ?? 0;
     const feedSignalLabel = getFeedSignalLabel(job);
@@ -733,6 +736,19 @@ export default function FeedScreen() {
                   {i18n.t('feed.top_buddy_badge')}
                 </Text>
               </View>
+            )}
+
+            {creatorReliability === 'trusted' && (
+              <View style={styles.reliabilityTrustedBadge}>
+                <Text style={styles.reliabilityTrustedBadgeText}>
+                  {i18n.t('job.signal_reliability_trusted')}
+                </Text>
+              </View>
+            )}
+            {creatorReliability === 'new' && (
+              <Text style={styles.reliabilityNewText}>
+                {i18n.t('job.signal_reliability_new')}
+              </Text>
             )}
           </View>
         )}
@@ -1427,5 +1443,24 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: '800',
     lineHeight: 13,
+  },
+  reliabilityTrustedBadge: {
+    backgroundColor: '#F0FFF4',
+    borderRadius: 999,
+    paddingVertical: 2,
+    paddingHorizontal: 7,
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+  },
+  reliabilityTrustedBadgeText: {
+    color: colors.green,
+    fontSize: 10,
+    fontWeight: '600',
+    lineHeight: 14,
+  },
+  reliabilityNewText: {
+    color: colors.placeholder,
+    fontSize: 10,
+    lineHeight: 14,
   },
 });

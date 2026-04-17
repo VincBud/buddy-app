@@ -42,7 +42,8 @@ import {
     incrementJobViews,
 } from '../../lib/signals';
 import { layout, spacing } from '../../lib/spacing';
-import { getReliabilitySignal } from '../../lib/trust';
+import { getReliabilityStatus } from '../../lib/trust';
+import { getReliabilityStats, incrementReliabilityStats } from '../../services/user.service';
 import { typography } from '../../lib/typography';
 
 const USER_LOCATION = {
@@ -439,6 +440,7 @@ export default function JobDetailScreen() {
         String(j.id) === String(jobId) ? { ...j, status: 'cancelled' as const } : j
       );
       await AsyncStorage.setItem('jobs', JSON.stringify(updatedAll));
+      await incrementReliabilityStats(activeDevUserId, 'cancelledJobs');
       handleBack();
     } catch {
       // fail silently
@@ -502,6 +504,7 @@ export default function JobDetailScreen() {
           ? completedWithReview.reduce((sum, entry) => sum + (entry.review?.rating ?? 0), 0) / ratingCount
           : undefined;
 
+      const reliabilityStats = await getReliabilityStats(activeDevUserId);
       const requestResult = await requestJobApplication({
         jobId: job.id,
         applicant: {
@@ -511,7 +514,7 @@ export default function JobDetailScreen() {
           buddyRatingAverage: averageRating,
           buddyRatingCount: ratingCount,
           buddyCompletedJobs: completedJobsCount,
-          buddyReliability: getReliabilitySignal({ completedJobs: completedJobsCount }),
+          buddyReliability: getReliabilityStatus(reliabilityStats),
         },
       });
 
@@ -747,8 +750,14 @@ export default function JobDetailScreen() {
                 {typeof application.buddyScore === 'number' && (
                   <Text style={styles.applicantMeta}>{' '}· Score {application.buddyScore}</Text>
                 )}
-                {application.buddyReliability === 'trusted' && (
-                  <Text style={styles.applicantMeta}>{isEnglish ? ' · Trusted' : ' · Vertrauenswürdig'}</Text>
+                {application.buddyReliability && (
+                  <Text style={[
+                    styles.applicantMeta,
+                    application.buddyReliability === 'trusted' && styles.reliabilityTrusted,
+                    application.buddyReliability === 'new' && styles.reliabilityNew,
+                  ]}>
+                    {' · '}{i18n.t(`notifications.requester_review_reliability_${application.buddyReliability}`)}
+                  </Text>
                 )}
               </View>
               {typeof application.buddyCompletedJobs === 'number' && application.buddyCompletedJobs > 0 && (
@@ -1673,5 +1682,12 @@ const styles = StyleSheet.create({
     ...typography.meta,
     color: colors.textSecondary,
     marginTop: spacing.xs,
+  },
+  reliabilityTrusted: {
+    color: colors.green,
+    fontWeight: '600',
+  },
+  reliabilityNew: {
+    color: colors.placeholder,
   },
 });
