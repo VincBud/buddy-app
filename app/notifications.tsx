@@ -25,7 +25,8 @@ import { getReliabilitySignal, getTrustStarFillRatio } from '../lib/trust';
 import { typography } from '../lib/typography';
 
 export default function NotificationsScreen() {
-  useLanguage();
+  const language = useLanguage();
+  const isEnglish = language === 'en';
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [notifications, setNotifications] = useState<Notification[]>([]);
@@ -132,6 +133,21 @@ export default function NotificationsScreen() {
     }
   };
 
+  const NAVIGABLE_TYPES: string[] = [
+    'jobApplication', 'jobApplicationAccepted', 'jobApplicationDeclined',
+    'jobAccepted', 'chatUnlocked', 'jobCompleted', 'jobCancelled',
+    'jobExtended', 'issueResolved', 'problemReported', 'review', 'preferredBuddyJob',
+  ];
+
+  const navigateToJob = async (notification: Notification) => {
+    if (!notification.relatedJobId) return;
+    await markAsRead(notification.id);
+    router.push({
+      pathname: '/job/[id]',
+      params: { id: String(notification.relatedJobId) },
+    });
+  };
+
   const getNotificationTypeLabel = (type: string): string => {
     const key = `notifications.${type}`;
     return i18n.t(key);
@@ -162,10 +178,18 @@ export default function NotificationsScreen() {
     if (!notification.relatedJobId) return;
     const jobId = String(notification.relatedJobId);
 
+    const matchedJob = applicationJobsById[jobId];
+    const pendingApplication =
+      matchedJob?.match?.applications?.find((a) => a.requesterDecision === 'pending') ??
+      matchedJob?.match?.applications?.at(-1);
+    const buddyId = pendingApplication?.buddyId;
+    if (!buddyId) return;
+
     try {
       setReviewingJobId(jobId);
       const result = await reviewJobApplication({
         jobId,
+        buddyId,
         decision,
         requesterId: 'requester_local',
       });
@@ -447,6 +471,17 @@ export default function NotificationsScreen() {
               )}
 
               <View style={styles.actions}>
+                {notification.relatedJobId && NAVIGABLE_TYPES.includes(notification.type) && (
+                  <Pressable
+                    style={[styles.actionButton, styles.viewButton]}
+                    onPress={() => navigateToJob(notification)}
+                  >
+                    <Ionicons name="arrow-forward-outline" size={14} color={colors.textPrimary} />
+                    <Text style={styles.viewButtonText} numberOfLines={1}>
+                      {isEnglish ? 'View' : 'Ansehen'}
+                    </Text>
+                  </Pressable>
+                )}
                 {!notification.read ? (
                   <Pressable
                     style={[styles.actionButton, styles.actionPrimaryButton]}
@@ -861,5 +896,17 @@ const styles = StyleSheet.create({
   },
   deleteText: {
     color: colors.primary,
+  },
+  viewButton: {
+    backgroundColor: 'transparent',
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: layout.borderRadiusMedium,
+    paddingHorizontal: spacing.sm,
+  },
+  viewButtonText: {
+    ...typography.meta,
+    color: colors.textPrimary,
+    fontWeight: '600',
   },
 });

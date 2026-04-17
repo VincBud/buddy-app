@@ -20,11 +20,13 @@ export type TimeMode = 'sofort' | 'flexibel' | 'termin';
  * issue_reported — problem reported by either party during matched/active; payment frozen;
  *                  normal completion path blocked; awaiting support review or cancellation
  * completed      — done; payment release pending; reviews available
+ * paused         — owner temporarily hid job from marketplace; data preserved; resumable
  * cancelled      — stopped by either party; no further actions
  * expired        — timed out without a match; no further applications accepted
  */
 export type JobStatus =
   | 'open'
+  | 'paused'
   | 'matched'
   | 'active'
   | 'issue_reported'
@@ -471,6 +473,68 @@ export const extendJobExpiry = (
  *   "läuft morgen ab"
  *   "abgelaufen"
  */
+// ─── Owner management eligibility ────────────────────────────────────────────
+
+/**
+ * Only open jobs with no accepted/matched buddy may be edited.
+ * Once a buddy is confirmed the content must stay frozen.
+ */
+export const isJobEditable = (job: Pick<Job, 'status' | 'match'>): boolean => {
+  if (job.status !== 'open') return false;
+  return !job.match?.selectedApplicationId;
+};
+
+export const isJobPauseable = (job: Pick<Job, 'status'>): boolean =>
+  job.status === 'open';
+
+export const isJobResumable = (job: Pick<Job, 'status'>): boolean =>
+  job.status === 'paused';
+
+export const isJobRepostable = (job: Pick<Job, 'status'>): boolean =>
+  job.status === 'expired' || job.status === 'cancelled' || job.status === 'completed';
+
+/**
+ * Returns jobs owned by the given user that are currently paused.
+ */
+export const getPausedOwnJobs = (jobs: Job[], currentUserId: string): Job[] =>
+  jobs.filter((j) => j.requesterId === currentUserId && j.status === 'paused');
+
+/**
+ * Returns old inactive own jobs eligible for reposting.
+ */
+export const getHistoricalOwnJobs = (jobs: Job[], currentUserId: string): Job[] =>
+  jobs.filter(
+    (j) =>
+      j.requesterId === currentUserId &&
+      isJobRepostable(j)
+  );
+
+/**
+ * Creates a fresh job entry from an existing one.
+ * Preserves content; resets all lifecycle fields.
+ * Pure — does NOT mutate the original.
+ */
+export const createRepostedJob = (source: Job): Job => {
+  const now = new Date().toISOString();
+  return {
+    ...source,
+    id: `${Date.now()}_repost`,
+    status: 'open',
+    createdAt: now,
+    updatedAt: now,
+    expiresAt: computeExpiresAt(source.timeMode, source.appointmentDate, source.appointmentTime),
+    extensionsUsed: 0,
+    maxExtensions: DEFAULT_MAX_EXTENSIONS,
+    match: undefined,
+    issueSummary: undefined,
+    cancellationSummary: undefined,
+    reviews: undefined,
+    review: undefined,
+    marketSignals: undefined,
+    payment: undefined,
+  };
+};
+
 export const getJobExpiryDisplay = (
   job: Pick<Job, 'expiresAt'>,
   locale: 'de' | 'en' = 'de'

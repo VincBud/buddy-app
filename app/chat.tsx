@@ -18,7 +18,7 @@ import i18n, { useLanguage } from '../lib/i18n';
 import { activateMatchedJob, isJobChatAccessible, isJobChatWritable } from '../lib/job-actions';
 import { getBuddyPointsForJob, Job } from '../lib/jobs';
 import { goBackOrReplace } from '../lib/navigation';
-import { createNotification, Notification } from '../lib/notifications';
+import { addNotification } from '../services/notifications.service';
 import { applyPaymentStateForJobStatus, ensureJobPaymentState } from '../lib/payments';
 import { layout, spacing } from '../lib/spacing';
 import { typography } from '../lib/typography';
@@ -323,21 +323,11 @@ export default function ChatScreen() {
         price: jobContext.price,
       });
 
-      // Create and persist notification
-      const notification = createNotification(
+      await addNotification(
         'jobCompleted',
         i18n.t('notifications.job_completed'),
         `${i18n.t('notifications.job_completed')}: ${jobContext.problem || 'Job'}`,
         jobId
-      );
-      const notificationsRaw = await AsyncStorage.getItem('notifications');
-      const existingNotifications: Notification[] = notificationsRaw
-        ? JSON.parse(notificationsRaw)
-        : [];
-      const updatedNotifications = [notification, ...existingNotifications];
-      await AsyncStorage.setItem(
-        'notifications',
-        JSON.stringify(updatedNotifications)
       );
 
       setJobStatus('completed');
@@ -462,6 +452,14 @@ export default function ChatScreen() {
             ...prev,
             status: result.updatedJob?.status ?? prev.status,
           }));
+          if (result.resultingStatus === 'active') {
+            await addNotification(
+              'chatUnlocked',
+              i18n.t('notifications.chatUnlocked_title'),
+              i18n.t('notifications.chatUnlocked_message'),
+              jobId
+            );
+          }
         }
       } catch (error) {
         console.error('Error activating matched job:', error);

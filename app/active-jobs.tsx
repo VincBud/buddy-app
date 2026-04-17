@@ -12,6 +12,8 @@ import { applyPaymentStateForJobStatus, ensureJobPaymentState } from '../lib/pay
 import { layout, spacing } from '../lib/spacing';
 import { typography } from '../lib/typography';
 import { recordJobCompletionEarning } from '../lib/wallet';
+import { getActiveDevUserId } from '../lib/dev-session';
+import { incrementReliabilityStats } from '../services/user.service';
 
 type Tab = 'now' | 'scheduled';
 
@@ -122,6 +124,10 @@ export default function ActiveJobsScreen() {
         (currentScore + getBuddyPointsForJob(job)).toString()
       );
       await recordJobCompletionEarning(job);
+      await incrementReliabilityStats(getActiveDevUserId(), 'completedJobs');
+      if (job.requesterId) {
+        await incrementReliabilityStats(job.requesterId, 'completedJobs');
+      }
       router.push({
         pathname: '/review/[jobId]',
         params: {

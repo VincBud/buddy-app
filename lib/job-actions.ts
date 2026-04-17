@@ -5,9 +5,16 @@ import {
     JobApplicationState,
     JobParticipantRole,
     JobStatus,
+    TimeMode,
+    computeExpiresAt,
+    createRepostedJob,
     isActiveJobStatus,
     isChatAccessibleForJob,
+    isJobEditable,
     isJobOpenForApplications,
+    isJobPauseable,
+    isJobRepostable,
+    isJobResumable,
 } from './jobs';
 import {
   applyPaymentStateForJobStatus,
@@ -520,4 +527,146 @@ export const resolveJobIssue = async (params: {
   await AsyncStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(nextJobs));
 
   return { updatedJob, resultingStatus };
+};
+
+export const pauseJob = async (params: {
+  jobId: string;
+  ownerId: string;
+}): Promise<{ updatedJob: Job | null; resultingStatus: JobStatus }> => {
+  const jobsRaw = await AsyncStorage.getItem(JOBS_STORAGE_KEY);
+  const jobs = safeParseJobs(jobsRaw);
+  const targetIndex = jobs.findIndex((job) => String(job.id) === String(params.jobId));
+
+  if (targetIndex < 0) {
+    return { updatedJob: null, resultingStatus: 'open' };
+  }
+
+  const targetJob = jobs[targetIndex];
+
+  if (targetJob.requesterId !== params.ownerId || !isJobPauseable(targetJob)) {
+    return { updatedJob: targetJob, resultingStatus: targetJob.status };
+  }
+
+  const updatedJob: Job = {
+    ...targetJob,
+    status: 'paused',
+    payment: applyPaymentStateForJobStatus(ensureJobPaymentState(targetJob), 'paused'),
+    updatedAt: getNowIso(),
+  };
+
+  const nextJobs = [...jobs];
+  nextJobs[targetIndex] = updatedJob;
+  await AsyncStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(nextJobs));
+
+  return { updatedJob, resultingStatus: 'paused' };
+};
+
+export const resumeJob = async (params: {
+  jobId: string;
+  ownerId: string;
+}): Promise<{ updatedJob: Job | null; resultingStatus: JobStatus }> => {
+  const jobsRaw = await AsyncStorage.getItem(JOBS_STORAGE_KEY);
+  const jobs = safeParseJobs(jobsRaw);
+  const targetIndex = jobs.findIndex((job) => String(job.id) === String(params.jobId));
+
+  if (targetIndex < 0) {
+    return { updatedJob: null, resultingStatus: 'open' };
+  }
+
+  const targetJob = jobs[targetIndex];
+
+  if (targetJob.requesterId !== params.ownerId || !isJobResumable(targetJob)) {
+    return { updatedJob: targetJob, resultingStatus: targetJob.status };
+  }
+
+  const updatedJob: Job = {
+    ...targetJob,
+    status: 'open',
+    payment: applyPaymentStateForJobStatus(ensureJobPaymentState(targetJob), 'open'),
+    updatedAt: getNowIso(),
+  };
+
+  const nextJobs = [...jobs];
+  nextJobs[targetIndex] = updatedJob;
+  await AsyncStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(nextJobs));
+
+  return { updatedJob, resultingStatus: 'open' };
+};
+
+export type EditableJobFields = {
+  problem?: string;
+  price?: string;
+  basePrice?: number;
+  platformFee?: number;
+  totalPrice?: number;
+  timeMode?: TimeMode;
+  appointmentDate?: string;
+  appointmentTime?: string;
+};
+
+export const editJobFields = async (params: {
+  jobId: string;
+  ownerId: string;
+  fields: EditableJobFields;
+}): Promise<{ updatedJob: Job | null; resultingStatus: JobStatus }> => {
+  const jobsRaw = await AsyncStorage.getItem(JOBS_STORAGE_KEY);
+  const jobs = safeParseJobs(jobsRaw);
+  const targetIndex = jobs.findIndex((job) => String(job.id) === String(params.jobId));
+
+  if (targetIndex < 0) {
+    return { updatedJob: null, resultingStatus: 'open' };
+  }
+
+  const targetJob = jobs[targetIndex];
+
+  if (targetJob.requesterId !== params.ownerId || !isJobEditable(targetJob)) {
+    return { updatedJob: targetJob, resultingStatus: targetJob.status };
+  }
+
+  const { fields } = params;
+  const nextTimeMode = fields.timeMode ?? targetJob.timeMode;
+  const nextAppointmentDate = fields.appointmentDate ?? targetJob.appointmentDate;
+  const nextAppointmentTime = fields.appointmentTime ?? targetJob.appointmentTime;
+
+  const updatedJob: Job = {
+    ...targetJob,
+    ...(fields.problem !== undefined && { problem: fields.problem }),
+    ...(fields.price !== undefined && { price: fields.price }),
+    ...(fields.basePrice !== undefined && { basePrice: fields.basePrice }),
+    ...(fields.platformFee !== undefined && { platformFee: fields.platformFee }),
+    ...(fields.totalPrice !== undefined && { totalPrice: fields.totalPrice }),
+    timeMode: nextTimeMode,
+    appointmentDate: nextAppointmentDate,
+    appointmentTime: nextAppointmentTime,
+    expiresAt: computeExpiresAt(nextTimeMode, nextAppointmentDate, nextAppointmentTime),
+    updatedAt: getNowIso(),
+  };
+
+  const nextJobs = [...jobs];
+  nextJobs[targetIndex] = updatedJob;
+  await AsyncStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify(nextJobs));
+
+  return { updatedJob, resultingStatus: targetJob.status };
+};
+
+export const repostJob = async (params: {
+  sourceJobId: string;
+  ownerId: string;
+}): Promise<{ newJob: Job | null }> => {
+  const jobsRaw = await AsyncStorage.getItem(JOBS_STORAGE_KEY);
+  const jobs = safeParseJobs(jobsRaw);
+  const sourceJob = jobs.find((job) => String(job.id) === String(params.sourceJobId));
+
+  if (!sourceJob) {
+    return { newJob: null };
+  }
+
+  if (sourceJob.requesterId !== params.ownerId || !isJobRepostable(sourceJob)) {
+    return { newJob: null };
+  }
+
+  const newJob = createRepostedJob(sourceJob);
+  await AsyncStorage.setItem(JOBS_STORAGE_KEY, JSON.stringify([...jobs, newJob]));
+
+  return { newJob };
 };

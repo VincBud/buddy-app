@@ -19,7 +19,6 @@ import {
     JobCategory,
 } from '../../lib/jobs';
 import { getLevelInfo, getStatusFromLevel } from '../../lib/levels';
-import { createNotification, Notification } from '../../lib/notifications';
 import { applyPaymentStateForJobStatus, ensureJobPaymentState } from '../../lib/payments';
 import {
     inferJobCategory,
@@ -29,6 +28,7 @@ import {
 } from '../../lib/preferences';
 import { getInterestedBuddyCount, getJobViewsCount, getRequesterReliability } from '../../lib/signals';
 import { incrementReliabilityStats } from '../../services/user.service';
+import { addNotification as addNotif } from '../../services/notifications.service';
 import { layout, spacing } from '../../lib/spacing';
 import { typography } from '../../lib/typography';
 import { recordJobCompletionEarning } from '../../lib/wallet';
@@ -228,24 +228,15 @@ export default function FeedScreen() {
       await AsyncStorage.setItem('buddyScore', updatedScore.toString());
       await recordJobCompletionEarning(job);
       await incrementReliabilityStats(getActiveDevUserId(), 'completedJobs');
+      if (job.requesterId) {
+        await incrementReliabilityStats(job.requesterId, 'completedJobs');
+      }
 
-      const notification = createNotification(
+      await addNotif(
         'jobCompleted',
         i18n.t('notifications.job_completed'),
         `${i18n.t('notifications.job_completed')}: ${job.problem}`,
         job.id
-      );
-
-      const notificationsRaw = await AsyncStorage.getItem('notifications');
-      const existingNotifications: Notification[] = notificationsRaw
-        ? JSON.parse(notificationsRaw)
-        : [];
-
-      const updatedNotifications = [notification, ...existingNotifications];
-
-      await AsyncStorage.setItem(
-        'notifications',
-        JSON.stringify(updatedNotifications)
       );
 
       await loadJobs();

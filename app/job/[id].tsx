@@ -15,19 +15,22 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../lib/colors';
 import i18n, { useLanguage } from '../../lib/i18n';
 import { getActiveDevUser, getActiveDevUserId } from '../../lib/dev-session';
-import { requestJobApplication, reviewJobApplication } from '../../lib/job-actions';
+import { pauseJob, requestJobApplication, repostJob, resumeJob, reviewJobApplication } from '../../lib/job-actions';
 import {
     canExtendJob,
     extendJobExpiry,
     getBuddyPointsForJob,
     getRemainingExtensions,
+    isJobEditable,
     isJobOpenForApplications,
+    isJobPauseable,
+    isJobRepostable,
+    isJobResumable,
     Job,
     JobApplicationState,
 } from '../../lib/jobs';
 import { getLevelInfo } from '../../lib/levels';
 import { goBackOrReplace } from '../../lib/navigation';
-import { createNotification, Notification } from '../../lib/notifications';
 import {
     ensureJobPaymentState,
     formatPriceLine,
@@ -44,6 +47,7 @@ import {
 import { layout, spacing } from '../../lib/spacing';
 import { getReliabilityStatus } from '../../lib/trust';
 import { getReliabilityStats, incrementReliabilityStats } from '../../services/user.service';
+import { addNotification } from '../../services/notifications.service';
 import { typography } from '../../lib/typography';
 
 const USER_LOCATION = {
@@ -94,6 +98,8 @@ export default function JobDetailScreen() {
   const [isExtendModalVisible, setIsExtendModalVisible] = useState(false);
   const [selectedDurationMs, setSelectedDurationMs] = useState(EXTEND_OPTIONS[1].ms);
   const [isCancelConfirmVisible, setIsCancelConfirmVisible] = useState(false);
+  const [isPauseConfirmVisible, setIsPauseConfirmVisible] = useState(false);
+  const [isRepostConfirmVisible, setIsRepostConfirmVisible] = useState(false);
   const [isReviewingApplication, setIsReviewingApplication] = useState(false);
   const isEnglish = String(i18n.locale).toLowerCase().startsWith('en');
 
@@ -423,6 +429,12 @@ export default function JobDetailScreen() {
       await AsyncStorage.setItem('jobs', JSON.stringify(updatedAll));
       const updatedJob = updatedAll.find((j) => String(j.id) === String(jobId));
       if (updatedJob) setJob(updatedJob);
+      await addNotification(
+        'jobExtended',
+        i18n.t('notifications.jobExtended_title'),
+        i18n.t('notifications.jobExtended_message'),
+        jobId
+      );
     } catch {
       // fail silently — state unchanged
     }
@@ -441,6 +453,44 @@ export default function JobDetailScreen() {
       );
       await AsyncStorage.setItem('jobs', JSON.stringify(updatedAll));
       await incrementReliabilityStats(activeDevUserId, 'cancelledJobs');
+      await addNotification(
+        'jobCancelled',
+        i18n.t('notifications.jobCancelled_title'),
+        i18n.t('notifications.jobCancelled_message'),
+        jobId
+      );
+      handleBack();
+    } catch {
+      // fail silently
+    }
+  };
+
+  const confirmPause = async () => {
+    if (!job) return;
+    setIsPauseConfirmVisible(false);
+    try {
+      const { updatedJob } = await pauseJob({ jobId: job.id, ownerId: activeDevUserId });
+      if (updatedJob) setJob(updatedJob);
+    } catch {
+      // fail silently
+    }
+  };
+
+  const confirmResume = async () => {
+    if (!job) return;
+    try {
+      const { updatedJob } = await resumeJob({ jobId: job.id, ownerId: activeDevUserId });
+      if (updatedJob) setJob(updatedJob);
+    } catch {
+      // fail silently
+    }
+  };
+
+  const confirmRepost = async () => {
+    if (!job) return;
+    setIsRepostConfirmVisible(false);
+    try {
+      await repostJob({ sourceJobId: job.id, ownerId: activeDevUserId });
       handleBack();
     } catch {
       // fail silently
@@ -458,6 +508,14 @@ export default function JobDetailScreen() {
         requesterId: activeDevUserId,
       });
       if (result.updatedJob) setJob(result.updatedJob);
+      await addNotification(
+        'jobApplicationAccepted',
+        i18n.t('notifications.job_application_accepted_title'),
+        i18n.t('notifications.job_application_accepted_message'),
+        job.id,
+        undefined,
+        buddyId
+      );
     } catch {
       // fail silently
     } finally {
@@ -476,6 +534,14 @@ export default function JobDetailScreen() {
         requesterId: activeDevUserId,
       });
       if (result.updatedJob) setJob(result.updatedJob);
+      await addNotification(
+        'jobApplicationDeclined',
+        i18n.t('notifications.job_application_declined_title'),
+        i18n.t('notifications.job_application_declined_message'),
+        job.id,
+        undefined,
+        buddyId
+      );
     } catch {
       // fail silently
     } finally {
@@ -523,24 +589,16 @@ export default function JobDetailScreen() {
         return;
       }
 
-      // Create and persist notification
-      const notification = createNotification(
+      await addNotification(
         'jobApplication',
         i18n.t('notifications.job_application_received'),
         i18n.t('notifications.job_application_received_message', {
-          buddy: requestResult.updatedJob.match?.applications?.at(-1)?.buddyName || (isEnglish ? 'Buddy' : 'Buddy'),
+          buddy: requestResult.updatedJob.match?.applications?.at(-1)?.buddyName || 'Buddy',
           score: requestResult.updatedJob.match?.applications?.at(-1)?.buddyScore ?? buddyScore,
         }),
-        job.id
-      );
-      const notificationsRaw = await AsyncStorage.getItem('notifications');
-      const existingNotifications: Notification[] = notificationsRaw
-        ? JSON.parse(notificationsRaw)
-        : [];
-      const updatedNotifications = [notification, ...existingNotifications];
-      await AsyncStorage.setItem(
-        'notifications',
-        JSON.stringify(updatedNotifications)
+        job.id,
+        undefined,
+        activeDevUserId
       );
       setJob(requestResult.updatedJob);
       Alert.alert(
@@ -895,6 +953,51 @@ export default function JobDetailScreen() {
         {renderApplicantSection(currentJob)}
         {renderMediaCard(currentJob)}
 
+        {(isJobEditable(currentJob) || isJobPauseable(currentJob) || isJobResumable(currentJob) || isJobRepostable(currentJob)) && (
+          <View style={styles.ownerMgmtRow}>
+            {isJobEditable(currentJob) && (
+              <Pressable
+                style={styles.ownerMgmtBtn}
+                onPress={() => router.push('/my-posted-jobs')}
+              >
+                <Text style={styles.ownerMgmtBtnText}>
+                  {isEnglish ? 'Edit' : 'Bearbeiten'}
+                </Text>
+              </Pressable>
+            )}
+            {isJobPauseable(currentJob) && (
+              <Pressable
+                style={styles.ownerMgmtBtn}
+                onPress={() => setIsPauseConfirmVisible(true)}
+              >
+                <Text style={styles.ownerMgmtBtnText}>
+                  {isEnglish ? 'Pause' : 'Pausieren'}
+                </Text>
+              </Pressable>
+            )}
+            {isJobResumable(currentJob) && (
+              <Pressable
+                style={[styles.ownerMgmtBtn, styles.ownerMgmtBtnPrimary]}
+                onPress={confirmResume}
+              >
+                <Text style={[styles.ownerMgmtBtnText, styles.ownerMgmtBtnTextPrimary]}>
+                  {isEnglish ? '▶ Resume' : '▶ Fortsetzen'}
+                </Text>
+              </Pressable>
+            )}
+            {isJobRepostable(currentJob) && (
+              <Pressable
+                style={styles.ownerMgmtBtn}
+                onPress={() => setIsRepostConfirmVisible(true)}
+              >
+                <Text style={styles.ownerMgmtBtnText}>
+                  {isEnglish ? '↩ Repost' : '↩ Erneut posten'}
+                </Text>
+              </Pressable>
+            )}
+          </View>
+        )}
+
         <View style={styles.ownerActionRow}>
           <Pressable
             style={styles.ownerCancelButton}
@@ -1007,6 +1110,68 @@ export default function JobDetailScreen() {
             <Pressable style={styles.modalCancelButton} onPress={() => setIsCancelConfirmVisible(false)}>
               <Text style={styles.modalCancelButtonText}>
                 {isEnglish ? 'Go back' : 'Zurück'}
+              </Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={isPauseConfirmVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setIsPauseConfirmVisible(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setIsPauseConfirmVisible(false)}>
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>
+              {isEnglish ? 'Pause job?' : 'Job pausieren?'}
+            </Text>
+            <Text style={styles.cancelWarningText}>
+              {isEnglish
+                ? "Your job will be hidden from the feed until you resume it. No data is lost."
+                : 'Dein Auftrag wird im Feed ausgeblendet, bis du ihn fortsetzt. Alle Daten bleiben erhalten.'}
+            </Text>
+            <Pressable style={styles.confirmButton} onPress={confirmPause}>
+              <Text style={styles.confirmButtonText}>
+                {isEnglish ? 'Pause job' : 'Job pausieren'}
+              </Text>
+            </Pressable>
+            <Pressable style={styles.modalCancelButton} onPress={() => setIsPauseConfirmVisible(false)}>
+              <Text style={styles.modalCancelButtonText}>
+                {isEnglish ? 'Go back' : 'Zurück'}
+              </Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={isRepostConfirmVisible}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setIsRepostConfirmVisible(false)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setIsRepostConfirmVisible(false)}>
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>
+              {isEnglish ? 'Repost job?' : 'Job erneut posten?'}
+            </Text>
+            <Text style={styles.cancelWarningText}>
+              {isEnglish
+                ? 'A fresh copy of this job will be posted to the marketplace. The original stays in your history.'
+                : 'Eine neue Kopie dieses Auftrags wird im Marktplatz gepostet. Das Original bleibt in deinem Verlauf.'}
+            </Text>
+            <Pressable style={styles.confirmButton} onPress={confirmRepost}>
+              <Text style={styles.confirmButtonText}>
+                {isEnglish ? 'Yes, repost' : 'Ja, erneut posten'}
+              </Text>
+            </Pressable>
+            <Pressable style={styles.modalCancelButton} onPress={() => setIsRepostConfirmVisible(false)}>
+              <Text style={styles.modalCancelButtonText}>
+                {isEnglish ? 'Cancel' : 'Abbrechen'}
               </Text>
             </Pressable>
           </Pressable>
@@ -1689,5 +1854,33 @@ const styles = StyleSheet.create({
   },
   reliabilityNew: {
     color: colors.placeholder,
+  },
+  ownerMgmtRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginHorizontal: layout.screenPaddingX,
+    marginBottom: spacing.sm,
+  },
+  ownerMgmtBtn: {
+    borderRadius: 8,
+    paddingVertical: 7,
+    paddingHorizontal: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.overlayLightPurple,
+    backgroundColor: colors.veryLightPurple,
+  },
+  ownerMgmtBtnPrimary: {
+    backgroundColor: colors.secondary,
+    borderColor: colors.secondary,
+  },
+  ownerMgmtBtnText: {
+    fontSize: 13,
+    fontWeight: '600' as const,
+    lineHeight: 17,
+    color: colors.secondary,
+  },
+  ownerMgmtBtnTextPrimary: {
+    color: colors.card,
   },
 });

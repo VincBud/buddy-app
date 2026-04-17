@@ -267,6 +267,12 @@ export default function ChatDetailsScreen() {
       if (result.updatedJob) {
         setJob(result.updatedJob as JobWithDescription);
       }
+      await addNotification(
+        'issueResolved',
+        i18n.t('notifications.issueResolved_title'),
+        i18n.t('notifications.issueResolved_message'),
+        job?.id
+      );
     } finally {
       setIsSubmittingResolve(false);
     }

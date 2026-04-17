@@ -71,6 +71,7 @@ export type JobPaymentState = {
 
 type PaymentJobStatus =
   | 'open'
+  | 'paused'
   | 'matched'
   | 'active'
   | 'issue_reported'
@@ -168,8 +169,8 @@ export const applyPaymentStateForJobStatus = (
 ): JobPaymentState => {
   const now = nowIso();
 
-  // Job re-opened or still open — no payment action yet
-  if (nextStatus === 'open') {
+  // Job re-opened, still open, or paused — no payment action yet
+  if (nextStatus === 'open' || nextStatus === 'paused') {
     return {
       ...payment,
       paymentStatus: 'none',

@@ -7,6 +7,9 @@ export type NotificationType =
   | 'jobApplicationAccepted'
   | 'jobApplicationDeclined'
   | 'jobCancelled'
+  | 'chatUnlocked'
+  | 'jobExtended'
+  | 'issueResolved'
   | 'problemReported'
   | 'review'
   | 'message'
@@ -106,6 +109,9 @@ const isValidNotificationType = (value: unknown): value is NotificationType => {
     value === 'jobApplicationAccepted' ||
     value === 'jobApplicationDeclined' ||
     value === 'jobCancelled' ||
+    value === 'chatUnlocked' ||
+    value === 'jobExtended' ||
+    value === 'issueResolved' ||
     value === 'problemReported' ||
     value === 'review' ||
     value === 'message' ||
@@ -233,6 +239,9 @@ export const getNotificationPreferenceKeyForType = (
     type === 'jobApplicationAccepted' ||
     type === 'jobApplicationDeclined' ||
     type === 'jobCancelled' ||
+    type === 'chatUnlocked' ||
+    type === 'jobExtended' ||
+    type === 'issueResolved' ||
     type === 'problemReported'
   ) {
     return 'jobActivity';
@@ -293,6 +302,18 @@ const NOTIFICATION_PRESENTATION: Record<NotificationType, NotificationPresentati
   jobCancelled: {
     iconName: 'chatbubble-ellipses-outline',
     tone: 'default',
+  },
+  chatUnlocked: {
+    iconName: 'checkmark-circle-outline',
+    tone: 'success',
+  },
+  jobExtended: {
+    iconName: 'checkmark-circle-outline',
+    tone: 'default',
+  },
+  issueResolved: {
+    iconName: 'checkmark-circle-outline',
+    tone: 'success',
   },
   problemReported: {
     iconName: 'chatbubble-ellipses-outline',

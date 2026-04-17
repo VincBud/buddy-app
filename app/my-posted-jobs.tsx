@@ -1,7 +1,15 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import {
+    Modal,
+    Pressable,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TextInput,
+    View,
+} from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../lib/colors';
 import i18n, { useLanguage } from '../lib/i18n';
@@ -10,12 +18,24 @@ import {
     canExtendJob,
     extendJobExpiry,
     getActiveOwnJobs,
+    getHistoricalOwnJobs,
     getJobExpiryDisplay,
     getJobExpiryUrgency,
+    getPausedOwnJobs,
     getRemainingExtensions,
+    isJobEditable,
+    isJobPauseable,
     Job,
     LOCAL_USER_ID,
+    TimeMode,
 } from '../lib/jobs';
+import {
+    editJobFields,
+    EditableJobFields,
+    pauseJob,
+    repostJob,
+    resumeJob,
+} from '../lib/job-actions';
 import { layout, spacing } from '../lib/spacing';
 import { typography } from '../lib/typography';
 
@@ -32,14 +52,30 @@ const EXTEND_OPTIONS: { label: string; ms: number }[] = [
   { label: '24h', ms: 24 * 3600 * 1000 },
 ];
 
+const TIME_MODES: TimeMode[] = ['sofort', 'flexibel', 'termin'];
+
 export default function MyPostedJobsScreen() {
   useLanguage();
   const insets = useSafeAreaInsets();
-  const [myJobs, setMyJobs] = useState<Job[]>([]);
+
+  const [activeJobs, setActiveJobs] = useState<Job[]>([]);
+  const [pausedJobs, setPausedJobs] = useState<Job[]>([]);
+  const [historicalJobs, setHistoricalJobs] = useState<Job[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+
   const [extendingJob, setExtendingJob] = useState<Job | null>(null);
   const [selectedDurationMs, setSelectedDurationMs] = useState<number>(EXTEND_OPTIONS[1].ms);
   const [cancellingJob, setCancellingJob] = useState<Job | null>(null);
+  const [pausingJob, setPausingJob] = useState<Job | null>(null);
+  const [repostingJob, setRepostingJob] = useState<Job | null>(null);
+
+  const [editingJob, setEditingJob] = useState<Job | null>(null);
+  const [editProblem, setEditProblem] = useState('');
+  const [editPrice, setEditPrice] = useState('');
+  const [editTimeMode, setEditTimeMode] = useState<TimeMode>('sofort');
+  const [editAppointmentDate, setEditAppointmentDate] = useState('');
+  const [editAppointmentTime, setEditAppointmentTime] = useState('');
+
   const [successToast, setSuccessToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
@@ -66,17 +102,26 @@ export default function MyPostedJobsScreen() {
       }
 
       const active = getActiveOwnJobs(withExpiry, LOCAL_USER_ID);
-
-      // Sort by expiresAt ascending — soonest expiry first
       active.sort((a, b) => {
         if (!a.expiresAt) return 1;
         if (!b.expiresAt) return -1;
         return new Date(a.expiresAt).getTime() - new Date(b.expiresAt).getTime();
       });
 
-      setMyJobs(active);
+      const paused = getPausedOwnJobs(withExpiry, LOCAL_USER_ID);
+      const historical = getHistoricalOwnJobs(withExpiry, LOCAL_USER_ID);
+      historical.sort((a, b) =>
+        new Date(b.updatedAt ?? b.createdAt ?? 0).getTime() -
+        new Date(a.updatedAt ?? a.createdAt ?? 0).getTime()
+      );
+
+      setActiveJobs(active);
+      setPausedJobs(paused);
+      setHistoricalJobs(historical);
     } catch {
-      setMyJobs([]);
+      setActiveJobs([]);
+      setPausedJobs([]);
+      setHistoricalJobs([]);
     } finally {
       setIsLoading(false);
     }
@@ -92,6 +137,7 @@ export default function MyPostedJobsScreen() {
     router.push({ pathname: '/job/[id]', params: { id: job.id } });
   };
 
+  // --- Extend ---
   const openExtendModal = (job: Job) => {
     setSelectedDurationMs(EXTEND_OPTIONS[1].ms);
     setExtendingJob(job);
@@ -123,7 +169,7 @@ export default function MyPostedJobsScreen() {
 
       await AsyncStorage.setItem('jobs', JSON.stringify(updatedAll));
 
-      setMyJobs((prev) =>
+      setActiveJobs((prev) =>
         prev
           .map((j) => (String(j.id) === String(jobId) ? extendedJob! : j))
           .sort((a, b) => {
@@ -133,16 +179,13 @@ export default function MyPostedJobsScreen() {
           })
       );
 
-      setSuccessToast(
-        isEn
-          ? `Extended by ${chosenLabel} ✓`
-          : `Laufzeit um ${chosenLabel} verlängert ✓`
-      );
+      setSuccessToast(isEn ? `Extended by ${chosenLabel} ✓` : `Laufzeit um ${chosenLabel} verlängert ✓`);
     } catch {
       loadMyJobs();
     }
   };
 
+  // --- Cancel ---
   const confirmCancel = async () => {
     if (!cancellingJob) return;
     const jobId = cancellingJob.id;
@@ -154,17 +197,103 @@ export default function MyPostedJobsScreen() {
       const safe: Job[] = Array.isArray(parsed) ? parsed : [];
 
       const updatedAll = safe.map((j) =>
-        String(j.id) === String(jobId)
-          ? { ...j, status: 'cancelled' as const }
-          : j
+        String(j.id) === String(jobId) ? { ...j, status: 'cancelled' as const } : j
       );
 
       await AsyncStorage.setItem('jobs', JSON.stringify(updatedAll));
-
-      // Remove immediately from own-jobs view — no reload needed
-      setMyJobs((prev) => prev.filter((j) => String(j.id) !== String(jobId)));
-
+      setActiveJobs((prev) => prev.filter((j) => String(j.id) !== String(jobId)));
       setSuccessToast(isEn ? 'Job cancelled ✓' : 'Job wurde abgebrochen ✓');
+    } catch {
+      loadMyJobs();
+    }
+  };
+
+  // --- Pause ---
+  const confirmPause = async () => {
+    if (!pausingJob) return;
+    const job = pausingJob;
+    setPausingJob(null);
+
+    try {
+      const { updatedJob } = await pauseJob({ jobId: job.id, ownerId: LOCAL_USER_ID });
+      if (!updatedJob) return;
+      setActiveJobs((prev) => prev.filter((j) => String(j.id) !== String(job.id)));
+      setPausedJobs((prev) => [updatedJob, ...prev]);
+      setSuccessToast(isEn ? 'Job paused ✓' : 'Job pausiert ✓');
+    } catch {
+      loadMyJobs();
+    }
+  };
+
+  // --- Resume ---
+  const confirmResume = async (job: Job) => {
+    try {
+      const { updatedJob } = await resumeJob({ jobId: job.id, ownerId: LOCAL_USER_ID });
+      if (!updatedJob) return;
+      setPausedJobs((prev) => prev.filter((j) => String(j.id) !== String(job.id)));
+      setActiveJobs((prev) =>
+        [updatedJob, ...prev].sort((a, b) => {
+          if (!a.expiresAt) return 1;
+          if (!b.expiresAt) return -1;
+          return new Date(a.expiresAt).getTime() - new Date(b.expiresAt).getTime();
+        })
+      );
+      setSuccessToast(isEn ? 'Job resumed ✓' : 'Job fortgesetzt ✓');
+    } catch {
+      loadMyJobs();
+    }
+  };
+
+  // --- Repost ---
+  const confirmRepost = async () => {
+    if (!repostingJob) return;
+    const job = repostingJob;
+    setRepostingJob(null);
+
+    try {
+      const { newJob } = await repostJob({ sourceJobId: job.id, ownerId: LOCAL_USER_ID });
+      if (!newJob) return;
+      setActiveJobs((prev) => [newJob, ...prev]);
+      setSuccessToast(isEn ? 'Job reposted ✓' : 'Job erneut gepostet ✓');
+    } catch {
+      loadMyJobs();
+    }
+  };
+
+  // --- Edit ---
+  const openEditModal = (job: Job) => {
+    setEditProblem(job.problem ?? '');
+    setEditPrice(job.price ?? '');
+    setEditTimeMode(job.timeMode ?? 'sofort');
+    setEditAppointmentDate(job.appointmentDate ?? '');
+    setEditAppointmentTime(job.appointmentTime ?? '');
+    setEditingJob(job);
+  };
+
+  const confirmEdit = async () => {
+    if (!editingJob) return;
+    const job = editingJob;
+    setEditingJob(null);
+
+    const fields: EditableJobFields = {
+      problem: editProblem.trim() || job.problem,
+      price: editPrice.trim() || job.price,
+      timeMode: editTimeMode,
+      appointmentDate: editTimeMode === 'termin' ? editAppointmentDate.trim() : undefined,
+      appointmentTime: editTimeMode === 'termin' ? editAppointmentTime.trim() : undefined,
+    };
+
+    try {
+      const { updatedJob } = await editJobFields({
+        jobId: job.id,
+        ownerId: LOCAL_USER_ID,
+        fields,
+      });
+      if (!updatedJob) return;
+      setActiveJobs((prev) =>
+        prev.map((j) => (String(j.id) === String(job.id) ? updatedJob : j))
+      );
+      setSuccessToast(isEn ? 'Job updated ✓' : 'Job aktualisiert ✓');
     } catch {
       loadMyJobs();
     }
@@ -172,6 +301,8 @@ export default function MyPostedJobsScreen() {
 
   const locale = getLocale();
   const isEn = locale === 'en';
+
+  const totalCount = activeJobs.length + pausedJobs.length;
 
   return (
     <View style={styles.screen}>
@@ -200,10 +331,10 @@ export default function MyPostedJobsScreen() {
           <Text style={styles.loadingText}>
             {isEn ? 'Loading…' : 'Wird geladen…'}
           </Text>
-        ) : myJobs.length === 0 ? (
+        ) : totalCount === 0 && historicalJobs.length === 0 ? (
           <View style={styles.emptyState}>
             <Text style={styles.emptyTitle}>
-              {isEn ? 'No active posted jobs' : 'Keine aktiven Aufträge'}
+              {isEn ? 'No posted jobs yet' : 'Noch keine Aufträge'}
             </Text>
             <Text style={styles.emptyHint}>
               {isEn
@@ -221,121 +352,294 @@ export default function MyPostedJobsScreen() {
           </View>
         ) : (
           <>
-            <Text style={styles.countHint}>
-              {isEn
-                ? `${myJobs.length} active ${myJobs.length === 1 ? 'job' : 'jobs'}`
-                : `${myJobs.length} aktiver ${myJobs.length === 1 ? 'Auftrag' : 'Aufträge'}`}
-            </Text>
-            {myJobs.map((job) => {
-              const expiryLabel = getJobExpiryDisplay(job, locale);
-              const urgency = getJobExpiryUrgency(job);
-              const remaining = getRemainingExtensions(job);
-              const extensionsAllowed = canExtendJob(job);
+            {/* Active (open) jobs */}
+            {activeJobs.length > 0 && (
+              <>
+                <Text style={styles.sectionLabel}>
+                  {isEn ? `Active · ${activeJobs.length}` : `Aktiv · ${activeJobs.length}`}
+                </Text>
+                {activeJobs.map((job) => {
+                  const expiryLabel = getJobExpiryDisplay(job, locale);
+                  const urgency = getJobExpiryUrgency(job);
+                  const remaining = getRemainingExtensions(job);
+                  const extensionsAllowed = canExtendJob(job);
+                  const canEdit = isJobEditable(job);
+                  const canPause = isJobPauseable(job);
 
-              return (
-                <Pressable
-                  key={job.id}
-                  style={({ pressed }) => [
-                    styles.card,
-                    urgency === 'critical' && styles.cardCritical,
-                    pressed && styles.cardPressed,
-                  ]}
-                  onPress={() => openJob(job)}
-                >
-                  <View style={styles.cardTopRow}>
-                    <Text style={styles.jobProblem} numberOfLines={2}>
-                      {job.problem}
-                    </Text>
-                    <View style={styles.pricePill}>
-                      <Text style={styles.priceText}>{job.price}€</Text>
-                    </View>
-                  </View>
+                  return (
+                    <Pressable
+                      key={job.id}
+                      style={({ pressed }) => [
+                        styles.card,
+                        urgency === 'critical' && styles.cardCritical,
+                        pressed && styles.cardPressed,
+                      ]}
+                      onPress={() => openJob(job)}
+                    >
+                      <View style={styles.cardTopRow}>
+                        <Text style={styles.jobProblem} numberOfLines={2}>
+                          {job.problem}
+                        </Text>
+                        <View style={styles.pricePill}>
+                          <Text style={styles.priceText}>{job.price}€</Text>
+                        </View>
+                      </View>
 
-                  <View style={styles.cardBottomRow}>
-                    <View style={styles.timeModeChip}>
-                      <Text style={styles.timeModeText}>
-                        {job.timeMode === 'sofort'
-                          ? `⚡ ${isEn ? 'Now' : 'Sofort'}`
-                          : job.timeMode === 'flexibel'
-                          ? isEn ? 'Flexible' : 'Flexibel'
-                          : isEn ? 'Scheduled' : 'Termin'}
+                      <View style={styles.cardBottomRow}>
+                        <View style={styles.timeModeChip}>
+                          <Text style={styles.timeModeText}>
+                            {job.timeMode === 'sofort'
+                              ? `⚡ ${isEn ? 'Now' : 'Sofort'}`
+                              : job.timeMode === 'flexibel'
+                              ? isEn ? 'Flexible' : 'Flexibel'
+                              : isEn ? 'Scheduled' : 'Termin'}
+                          </Text>
+                        </View>
+
+                        {expiryLabel && (
+                          <View
+                            style={[
+                              styles.expiryChip,
+                              urgency === 'soon' && styles.expiryChipSoon,
+                              urgency === 'critical' && styles.expiryChipCritical,
+                            ]}
+                          >
+                            <Text
+                              style={[
+                                styles.expiryText,
+                                urgency === 'soon' && styles.expiryTextSoon,
+                                urgency === 'critical' && styles.expiryTextCritical,
+                              ]}
+                            >
+                              {expiryLabel}
+                            </Text>
+                          </View>
+                        )}
+                      </View>
+
+                      {(canEdit || canPause) && (
+                        <View style={styles.ownerActionRow}>
+                          {canEdit && (
+                            <Pressable
+                              style={({ pressed }) => [styles.ownerActionBtn, pressed && styles.ownerActionBtnPressed]}
+                              onPress={() => openEditModal(job)}
+                              hitSlop={6}
+                            >
+                              <Text style={styles.ownerActionBtnText}>
+                                {isEn ? 'Edit' : 'Bearbeiten'}
+                              </Text>
+                            </Pressable>
+                          )}
+                          {canPause && (
+                            <Pressable
+                              style={({ pressed }) => [styles.ownerActionBtn, pressed && styles.ownerActionBtnPressed]}
+                              onPress={() => setPausingJob(job)}
+                              hitSlop={6}
+                            >
+                              <Text style={styles.ownerActionBtnText}>
+                                {isEn ? 'Pause' : 'Pausieren'}
+                              </Text>
+                            </Pressable>
+                          )}
+                        </View>
+                      )}
+
+                      <View style={styles.cardFooter}>
+                        <View style={styles.cardActionRow}>
+                          <Pressable
+                            style={({ pressed }) => [
+                              styles.cancelJobButton,
+                              pressed && styles.cancelJobButtonPressed,
+                            ]}
+                            onPress={() => setCancellingJob(job)}
+                            hitSlop={8}
+                          >
+                            <Text style={styles.cancelJobButtonText}>
+                              {isEn ? 'Cancel' : 'Abbrechen'}
+                            </Text>
+                          </Pressable>
+
+                          <Text style={styles.extensionsHint}>
+                            {extensionsAllowed
+                              ? remaining === 1
+                                ? isEn ? 'Last extension' : 'Letzte Verlängerung'
+                                : isEn ? `${remaining} extensions left` : `Noch ${remaining} Verlängerungen`
+                              : isEn ? 'Limit reached' : 'Limit erreicht'}
+                          </Text>
+
+                          <Pressable
+                            style={({ pressed }) => [
+                              styles.extendButton,
+                              urgency === 'critical' && extensionsAllowed && styles.extendButtonCritical,
+                              !extensionsAllowed && styles.extendButtonDisabled,
+                              pressed && extensionsAllowed && styles.extendButtonPressed,
+                            ]}
+                            onPress={() => extensionsAllowed && openExtendModal(job)}
+                            hitSlop={8}
+                            disabled={!extensionsAllowed}
+                          >
+                            <Text
+                              style={[
+                                styles.extendButtonText,
+                                urgency === 'critical' && extensionsAllowed && styles.extendButtonTextCritical,
+                                !extensionsAllowed && styles.extendButtonTextDisabled,
+                              ]}
+                            >
+                              {isEn ? '+ Extend' : '+ Verlängern'}
+                            </Text>
+                          </Pressable>
+                        </View>
+                      </View>
+                    </Pressable>
+                  );
+                })}
+              </>
+            )}
+
+            {/* Paused jobs */}
+            {pausedJobs.length > 0 && (
+              <>
+                <Text style={styles.sectionLabel}>
+                  {isEn ? `Paused · ${pausedJobs.length}` : `Pausiert · ${pausedJobs.length}`}
+                </Text>
+                {pausedJobs.map((job) => (
+                  <Pressable
+                    key={job.id}
+                    style={({ pressed }) => [styles.card, styles.cardPaused, pressed && styles.cardPressed]}
+                    onPress={() => openJob(job)}
+                  >
+                    <View style={styles.cardTopRow}>
+                      <Text style={[styles.jobProblem, styles.textMuted]} numberOfLines={2}>
+                        {job.problem}
                       </Text>
+                      <View style={[styles.pricePill, styles.pricePillMuted]}>
+                        <Text style={[styles.priceText, styles.textMuted]}>{job.price}€</Text>
+                      </View>
                     </View>
 
-                    {expiryLabel && (
-                      <View
-                        style={[
-                          styles.expiryChip,
-                          urgency === 'soon' && styles.expiryChipSoon,
-                          urgency === 'critical' && styles.expiryChipCritical,
-                        ]}
-                      >
-                        <Text
-                          style={[
-                            styles.expiryText,
-                            urgency === 'soon' && styles.expiryTextSoon,
-                            urgency === 'critical' && styles.expiryTextCritical,
-                          ]}
-                        >
-                          {expiryLabel}
+                    <View style={styles.cardBottomRow}>
+                      <View style={styles.pausedBadge}>
+                        <Text style={styles.pausedBadgeText}>
+                          {isEn ? 'Paused' : 'Pausiert'}
                         </Text>
                       </View>
-                    )}
-                  </View>
+                    </View>
 
-                  <View style={styles.cardFooter}>
-                    <View style={styles.cardActionRow}>
-                      <Pressable
-                        style={({ pressed }) => [
-                          styles.cancelJobButton,
-                          pressed && styles.cancelJobButtonPressed,
-                        ]}
-                        onPress={() => setCancellingJob(job)}
-                        hitSlop={8}
-                      >
-                        <Text style={styles.cancelJobButtonText}>
-                          {isEn ? 'Cancel' : 'Abbrechen'}
-                        </Text>
-                      </Pressable>
+                    <View style={styles.cardFooter}>
+                      <View style={styles.cardActionRow}>
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.cancelJobButton,
+                            pressed && styles.cancelJobButtonPressed,
+                          ]}
+                          onPress={() => setCancellingJob(job)}
+                          hitSlop={8}
+                        >
+                          <Text style={styles.cancelJobButtonText}>
+                            {isEn ? 'Cancel' : 'Abbrechen'}
+                          </Text>
+                        </Pressable>
 
-                      <Text style={styles.extensionsHint}>
-                        {extensionsAllowed
-                          ? remaining === 1
-                            ? isEn ? 'Last extension' : 'Letzte Verlängerung'
-                            : isEn ? `${remaining} extensions left` : `Noch ${remaining} Verlängerungen`
-                          : isEn ? 'Limit reached' : 'Limit erreicht'}
+                        <View style={{ flex: 1 }} />
+
+                        <Pressable
+                          style={({ pressed }) => [
+                            styles.resumeButton,
+                            pressed && styles.extendButtonPressed,
+                          ]}
+                          onPress={() => confirmResume(job)}
+                          hitSlop={8}
+                        >
+                          <Text style={styles.resumeButtonText}>
+                            {isEn ? '▶ Resume' : '▶ Fortsetzen'}
+                          </Text>
+                        </Pressable>
+                      </View>
+                    </View>
+                  </Pressable>
+                ))}
+              </>
+            )}
+
+            {/* Historical jobs */}
+            {historicalJobs.length > 0 && (
+              <>
+                <Text style={styles.sectionLabel}>
+                  {isEn ? 'History' : 'Verlauf'}
+                </Text>
+                {historicalJobs.map((job) => (
+                  <Pressable
+                    key={job.id}
+                    style={({ pressed }) => [styles.card, styles.cardMuted, pressed && styles.cardPressed]}
+                    onPress={() => openJob(job)}
+                  >
+                    <View style={styles.cardTopRow}>
+                      <Text style={[styles.jobProblem, styles.textMuted]} numberOfLines={2}>
+                        {job.problem}
                       </Text>
+                      <View style={[styles.pricePill, styles.pricePillMuted]}>
+                        <Text style={[styles.priceText, styles.textMuted]}>{job.price}€</Text>
+                      </View>
+                    </View>
 
-                      <Pressable
-                        style={({ pressed }) => [
-                          styles.extendButton,
-                          urgency === 'critical' && extensionsAllowed && styles.extendButtonCritical,
-                          !extensionsAllowed && styles.extendButtonDisabled,
-                          pressed && extensionsAllowed && styles.extendButtonPressed,
+                    <View style={[styles.cardBottomRow, { marginBottom: 0 }]}>
+                      <View
+                        style={[
+                          styles.statusBadge,
+                          job.status === 'completed' && styles.statusBadgeCompleted,
+                          job.status === 'expired' && styles.statusBadgeExpired,
+                          job.status === 'cancelled' && styles.statusBadgeCancelled,
                         ]}
-                        onPress={() => extensionsAllowed && openExtendModal(job)}
-                        hitSlop={8}
-                        disabled={!extensionsAllowed}
                       >
                         <Text
                           style={[
-                            styles.extendButtonText,
-                            urgency === 'critical' && extensionsAllowed && styles.extendButtonTextCritical,
-                            !extensionsAllowed && styles.extendButtonTextDisabled,
+                            styles.statusBadgeText,
+                            job.status === 'completed' && styles.statusBadgeTextCompleted,
+                            job.status === 'expired' && styles.statusBadgeTextExpired,
+                            job.status === 'cancelled' && styles.statusBadgeTextCancelled,
                           ]}
                         >
-                          {isEn ? '+ Extend' : '+ Verlängern'}
+                          {job.status === 'completed'
+                            ? isEn ? 'Completed' : 'Abgeschlossen'
+                            : job.status === 'expired'
+                            ? isEn ? 'Expired' : 'Abgelaufen'
+                            : isEn ? 'Cancelled' : 'Abgebrochen'}
+                        </Text>
+                      </View>
+
+                      <Pressable
+                        style={({ pressed }) => [
+                          styles.repostButton,
+                          pressed && styles.extendButtonPressed,
+                        ]}
+                        onPress={() => setRepostingJob(job)}
+                        hitSlop={8}
+                      >
+                        <Text style={styles.repostButtonText}>
+                          {isEn ? '↩ Repost' : '↩ Erneut posten'}
                         </Text>
                       </Pressable>
                     </View>
-                  </View>
-                </Pressable>
-              );
-            })}
+                  </Pressable>
+                ))}
+              </>
+            )}
+
+            {totalCount === 0 && historicalJobs.length > 0 && (
+              <Pressable
+                style={({ pressed }) => [styles.createButton, { alignSelf: 'center', marginBottom: spacing.xl }, pressed && styles.pressed]}
+                onPress={() => router.push('/(tabs)/create')}
+              >
+                <Text style={styles.createButtonText}>
+                  {isEn ? '+ Post a new job' : '+ Neuen Auftrag posten'}
+                </Text>
+              </Pressable>
+            )}
           </>
         )}
       </ScrollView>
 
+      {/* Extend modal */}
       <Modal
         visible={extendingJob !== null}
         transparent
@@ -406,6 +710,7 @@ export default function MyPostedJobsScreen() {
         </Pressable>
       </Modal>
 
+      {/* Cancel modal */}
       <Modal
         visible={cancellingJob !== null}
         transparent
@@ -442,6 +747,207 @@ export default function MyPostedJobsScreen() {
             >
               <Text style={styles.cancelButtonText}>
                 {isEn ? 'Go back' : 'Zurück'}
+              </Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Pause modal */}
+      <Modal
+        visible={pausingJob !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setPausingJob(null)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setPausingJob(null)}>
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>
+              {isEn ? 'Pause job?' : 'Job pausieren?'}
+            </Text>
+            {pausingJob && (
+              <Text style={styles.modalJobLabel} numberOfLines={1}>
+                {pausingJob.problem}
+              </Text>
+            )}
+            <Text style={styles.cancelWarningText}>
+              {isEn
+                ? 'Your job will be hidden from the feed until you resume it. Applicants won\'t see it, but no data is lost.'
+                : 'Dein Auftrag wird im Feed ausgeblendet, bis du ihn fortsetzt. Bewerber sehen ihn nicht, aber alle Daten bleiben erhalten.'}
+            </Text>
+            <Pressable
+              style={({ pressed }) => [styles.confirmButton, pressed && styles.confirmButtonPressed]}
+              onPress={confirmPause}
+            >
+              <Text style={styles.confirmButtonText}>
+                {isEn ? 'Pause job' : 'Job pausieren'}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed]}
+              onPress={() => setPausingJob(null)}
+            >
+              <Text style={styles.cancelButtonText}>
+                {isEn ? 'Go back' : 'Zurück'}
+              </Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Repost modal */}
+      <Modal
+        visible={repostingJob !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setRepostingJob(null)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setRepostingJob(null)}>
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>
+              {isEn ? 'Repost job?' : 'Job erneut posten?'}
+            </Text>
+            {repostingJob && (
+              <Text style={styles.modalJobLabel} numberOfLines={1}>
+                {repostingJob.problem}
+              </Text>
+            )}
+            <Text style={styles.cancelWarningText}>
+              {isEn
+                ? 'A fresh copy of this job will be posted to the marketplace. The original stays in your history.'
+                : 'Eine neue Kopie dieses Auftrags wird im Marktplatz gepostet. Das Original bleibt in deinem Verlauf.'}
+            </Text>
+            <Pressable
+              style={({ pressed }) => [styles.confirmButton, pressed && styles.confirmButtonPressed]}
+              onPress={confirmRepost}
+            >
+              <Text style={styles.confirmButtonText}>
+                {isEn ? 'Yes, repost' : 'Ja, erneut posten'}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed]}
+              onPress={() => setRepostingJob(null)}
+            >
+              <Text style={styles.cancelButtonText}>
+                {isEn ? 'Cancel' : 'Abbrechen'}
+              </Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      {/* Edit modal */}
+      <Modal
+        visible={editingJob !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setEditingJob(null)}
+      >
+        <Pressable style={styles.modalBackdrop} onPress={() => setEditingJob(null)}>
+          <Pressable style={styles.modalSheet} onPress={() => {}}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>
+              {isEn ? 'Edit job' : 'Auftrag bearbeiten'}
+            </Text>
+
+            <Text style={styles.editFieldLabel}>
+              {isEn ? 'Description' : 'Beschreibung'}
+            </Text>
+            <TextInput
+              style={styles.editTextArea}
+              value={editProblem}
+              onChangeText={setEditProblem}
+              multiline
+              numberOfLines={3}
+              placeholder={isEn ? 'What do you need help with?' : 'Wobei brauchst du Hilfe?'}
+              placeholderTextColor={colors.placeholder}
+            />
+
+            <Text style={styles.editFieldLabel}>
+              {isEn ? 'Price (€)' : 'Preis (€)'}
+            </Text>
+            <TextInput
+              style={styles.editInput}
+              value={editPrice}
+              onChangeText={setEditPrice}
+              keyboardType="decimal-pad"
+              placeholder="20"
+              placeholderTextColor={colors.placeholder}
+            />
+
+            <Text style={styles.editFieldLabel}>
+              {isEn ? 'Timing' : 'Zeit'}
+            </Text>
+            <View style={styles.timeModeRow}>
+              {TIME_MODES.map((mode) => (
+                <Pressable
+                  key={mode}
+                  style={[
+                    styles.timeModeOption,
+                    editTimeMode === mode && styles.timeModeOptionSelected,
+                  ]}
+                  onPress={() => setEditTimeMode(mode)}
+                >
+                  <Text
+                    style={[
+                      styles.timeModeOptionText,
+                      editTimeMode === mode && styles.timeModeOptionTextSelected,
+                    ]}
+                  >
+                    {mode === 'sofort'
+                      ? isEn ? 'Now' : 'Sofort'
+                      : mode === 'flexibel'
+                      ? isEn ? 'Flexible' : 'Flexibel'
+                      : isEn ? 'Scheduled' : 'Termin'}
+                  </Text>
+                </Pressable>
+              ))}
+            </View>
+
+            {editTimeMode === 'termin' && (
+              <>
+                <Text style={styles.editFieldLabel}>
+                  {isEn ? 'Date (DD.MM.YYYY)' : 'Datum (TT.MM.JJJJ)'}
+                </Text>
+                <TextInput
+                  style={styles.editInput}
+                  value={editAppointmentDate}
+                  onChangeText={setEditAppointmentDate}
+                  placeholder="17.04.2026"
+                  placeholderTextColor={colors.placeholder}
+                  keyboardType="numbers-and-punctuation"
+                />
+                <Text style={styles.editFieldLabel}>
+                  {isEn ? 'Time (HH:MM)' : 'Uhrzeit (HH:MM)'}
+                </Text>
+                <TextInput
+                  style={styles.editInput}
+                  value={editAppointmentTime}
+                  onChangeText={setEditAppointmentTime}
+                  placeholder="14:00"
+                  placeholderTextColor={colors.placeholder}
+                  keyboardType="numbers-and-punctuation"
+                />
+              </>
+            )}
+
+            <Pressable
+              style={({ pressed }) => [styles.confirmButton, { marginTop: spacing.lg }, pressed && styles.confirmButtonPressed]}
+              onPress={confirmEdit}
+            >
+              <Text style={styles.confirmButtonText}>
+                {isEn ? 'Save changes' : 'Änderungen speichern'}
+              </Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed]}
+              onPress={() => setEditingJob(null)}
+            >
+              <Text style={styles.cancelButtonText}>
+                {isEn ? 'Cancel' : 'Abbrechen'}
               </Text>
             </Pressable>
           </Pressable>
@@ -546,10 +1052,13 @@ const styles = StyleSheet.create({
     ...typography.button,
     color: colors.card,
   },
-  countHint: {
-    ...typography.meta,
+  sectionLabel: {
+    ...typography.metaStrong,
     color: colors.textSecondary,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
+    marginTop: spacing.md,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
   },
   card: {
     backgroundColor: colors.card,
@@ -568,6 +1077,16 @@ const styles = StyleSheet.create({
     opacity: 0.97,
     transform: [{ scale: 0.992 }],
   },
+  cardPaused: {
+    borderColor: colors.overlayLightPurple,
+    backgroundColor: colors.veryLightPurple,
+  },
+  cardMuted: {
+    opacity: 0.75,
+  },
+  cardCritical: {
+    borderColor: '#FFCFC0',
+  },
   cardTopRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
@@ -581,6 +1100,9 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
     lineHeight: 22,
   },
+  textMuted: {
+    color: colors.textSecondary,
+  },
   pricePill: {
     backgroundColor: colors.lightOrange,
     borderRadius: 999,
@@ -588,6 +1110,10 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     borderWidth: 1,
     borderColor: '#FFD4C7',
+  },
+  pricePillMuted: {
+    backgroundColor: colors.lightGrey,
+    borderColor: colors.border,
   },
   priceText: {
     ...typography.metaStrong,
@@ -642,8 +1168,27 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontWeight: '700',
   },
-  cardCritical: {
-    borderColor: '#FFCFC0',
+  ownerActionRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  ownerActionBtn: {
+    borderRadius: 7,
+    paddingVertical: 5,
+    paddingHorizontal: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.overlayLightPurple,
+    backgroundColor: colors.veryLightPurple,
+  },
+  ownerActionBtnPressed: {
+    opacity: 0.6,
+  },
+  ownerActionBtnText: {
+    fontSize: 12,
+    fontWeight: '600' as const,
+    lineHeight: 16,
+    color: colors.secondary,
   },
   cardFooter: {
     borderTopWidth: 1,
@@ -713,6 +1258,82 @@ const styles = StyleSheet.create({
     fontWeight: '500' as const,
     lineHeight: 16,
     color: colors.textSecondary,
+  },
+  pausedBadge: {
+    backgroundColor: colors.veryLightPurple,
+    borderRadius: 999,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.overlayLightPurple,
+  },
+  pausedBadgeText: {
+    ...typography.meta,
+    color: colors.secondary,
+    fontWeight: '600',
+  },
+  resumeButton: {
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.secondary,
+    borderWidth: 1,
+    borderColor: colors.secondary,
+  },
+  resumeButtonText: {
+    fontSize: 13,
+    fontWeight: '700' as const,
+    lineHeight: 17,
+    color: colors.card,
+  },
+  statusBadge: {
+    borderRadius: 999,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderWidth: 1,
+    backgroundColor: colors.lightGrey,
+    borderColor: colors.border,
+  },
+  statusBadgeCompleted: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#86EFAC',
+  },
+  statusBadgeExpired: {
+    backgroundColor: '#FFFBEB',
+    borderColor: '#FDE68A',
+  },
+  statusBadgeCancelled: {
+    backgroundColor: '#FFF4F0',
+    borderColor: '#FFCFC0',
+  },
+  statusBadgeText: {
+    ...typography.meta,
+    color: colors.textSecondary,
+    fontWeight: '600',
+  },
+  statusBadgeTextCompleted: {
+    color: '#166534',
+  },
+  statusBadgeTextExpired: {
+    color: '#92400E',
+  },
+  statusBadgeTextCancelled: {
+    color: colors.primary,
+  },
+  repostButton: {
+    borderRadius: 999,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.lightGrey,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginLeft: 'auto',
+  },
+  repostButtonText: {
+    fontSize: 13,
+    fontWeight: '700' as const,
+    lineHeight: 17,
+    color: colors.textPrimary,
   },
   cancelWarningText: {
     ...typography.body,
@@ -797,6 +1418,59 @@ const styles = StyleSheet.create({
     color: colors.textPrimary,
   },
   durationOptionTextSelected: {
+    color: colors.card,
+  },
+  editFieldLabel: {
+    ...typography.metaStrong,
+    color: colors.textSecondary,
+    marginBottom: spacing.xs,
+    marginTop: spacing.md,
+  },
+  editInput: {
+    backgroundColor: colors.background,
+    borderRadius: layout.borderRadiusSmall,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    ...typography.body,
+    color: colors.textPrimary,
+  },
+  editTextArea: {
+    backgroundColor: colors.background,
+    borderRadius: layout.borderRadiusSmall,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    ...typography.body,
+    color: colors.textPrimary,
+    minHeight: 80,
+    textAlignVertical: 'top',
+  },
+  timeModeRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+  },
+  timeModeOption: {
+    flex: 1,
+    borderRadius: 999,
+    paddingVertical: spacing.sm,
+    alignItems: 'center',
+    backgroundColor: colors.lightGrey,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  timeModeOptionSelected: {
+    backgroundColor: colors.secondary,
+    borderColor: colors.secondary,
+  },
+  timeModeOptionText: {
+    ...typography.meta,
+    color: colors.textPrimary,
+    fontWeight: '600',
+  },
+  timeModeOptionTextSelected: {
     color: colors.card,
   },
   confirmButton: {

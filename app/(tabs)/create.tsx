@@ -17,9 +17,10 @@ import { colors } from '../../lib/colors';
 import i18n, { useLanguage } from '../../lib/i18n';
 import { getActiveDevUser, getActiveDevUserId } from '../../lib/dev-session';
 import { computeExpiresAt, Job, JOB_CATEGORIES, JobCategory, JobRebooking } from '../../lib/jobs';
-import { createNotification, Notification } from '../../lib/notifications';
+import { addNotification } from '../../services/notifications.service';
 import { createInitialPaymentState } from '../../lib/payments';
 import { loadPreferredBuddies, PreferredBuddy } from '../../lib/preferred-buddies';
+import { incrementReliabilityStats } from '../../services/user.service';
 import {
     calculatePriceBreakdown,
     formatPriceAmount,
@@ -374,27 +375,14 @@ export default function CreateScreen() {
 
       const updatedJobs = [newJob, ...safeJobs];
       await AsyncStorage.setItem('jobs', JSON.stringify(updatedJobs));
+      await incrementReliabilityStats(getActiveDevUserId(), 'totalPostedJobs');
 
       if (notifyPreferredBuddies && preferredBuddies.length > 0) {
-        const notification = createNotification(
+        await addNotification(
           'preferredBuddyJob',
           i18n.t('notifications.preferredBuddyJob'),
           i18n.t('notifications.preferred_buddy_rebooking'),
           newJob.id
-        );
-
-        const notificationsRaw = await AsyncStorage.getItem('notifications');
-        const existingNotifications: Notification[] = notificationsRaw
-          ? JSON.parse(notificationsRaw)
-          : [];
-
-        const safeNotifications = Array.isArray(existingNotifications)
-          ? existingNotifications
-          : [];
-
-        await AsyncStorage.setItem(
-          'notifications',
-          JSON.stringify([notification, ...safeNotifications])
         );
       }
 
