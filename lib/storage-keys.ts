@@ -29,6 +29,9 @@ export const STORAGE_KEYS = {
   // Reliability / trust stats (keyed per userId: `${key}_${userId}`)
   USER_RELIABILITY_STATS: 'userReliabilityStats',
 
+  // Current user model — keyed per userId: `${key}_${userId}`
+  CURRENT_USER: 'currentUser',
+
   // DEV ONLY — local user switcher
   DEV_ACTIVE_USER: 'dev_active_user',
 } as const;

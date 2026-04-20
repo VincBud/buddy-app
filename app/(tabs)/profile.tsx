@@ -1,22 +1,20 @@
 import {
   createEmptyWalletSnapshot,
   loadWalletSnapshot,
-  recordJobCompletionEarning,
   WalletSnapshot,
 } from '@/lib/wallet';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../lib/colors';
+import { loadCurrentUser } from '../../lib/current-user';
 import { DEV_USERS, getActiveDevUserId, useDevSession } from '../../lib/dev-session';
 import i18n, { getLanguage, setLanguage, useLanguage } from '../../lib/i18n';
-import { isJobChatAccessible } from '../../lib/job-actions';
-import { getActiveOwnJobs, getBuddyPointsForJob, getMatchedBuddyId, getMatchedBuddyName, isActiveJobStatus, isEligibleForRebooking, Job } from '../../lib/jobs';
+import { getActiveOwnJobs, getMatchedBuddyId, getMatchedBuddyName, isActiveJobStatus, isEligibleForRebooking, Job } from '../../lib/jobs';
 import { getLevelInfo } from '../../lib/levels';
-import { applyPaymentStateForJobStatus, ensureJobPaymentState } from '../../lib/payments';
 import {
   loadUserPreferences,
   UserPreferences,
@@ -24,9 +22,10 @@ import {
 import { loadPreferredBuddies, PreferredBuddy } from '../../lib/preferred-buddies';
 import { getNormalizedJobReviews, getReviewEligibility, toLegacyJobReview } from '../../lib/reviews';
 import { layout, spacing } from '../../lib/spacing';
-import { getTrustStarFillRatio } from '../../lib/trust';
+import { getTrustStarFillRatio, ReliabilitySignal } from '../../lib/trust';
 import { typography } from '../../lib/typography';
 import { loadUserProfile, updateUserProfile } from '../../lib/user-profile';
+import { getComputedReliability } from '../../services/user.service';
 
 type ProfileSnapshot = {
   allJobs: Job[];
@@ -39,23 +38,28 @@ type ProfileSnapshot = {
   profileImageUri: string | null;
   bio: string;
   wallet: WalletSnapshot;
+  displayName: string;
+  reliabilitySignal: ReliabilitySignal;
 };
 
 const loadProfileSnapshot = async (): Promise<ProfileSnapshot> => {
-  const [jobsRaw, scoreRaw, userProfile, loadedPreferences, loadedPreferredBuddies] =
+  const activeUserId = getActiveDevUserId();
+  const [jobsRaw, scoreRaw, userProfile, loadedPreferences, loadedPreferredBuddies, currentUser, reliabilitySignal] =
     await Promise.all([
       AsyncStorage.getItem('jobs'),
       AsyncStorage.getItem('buddyScore'),
       loadUserProfile(),
       loadUserPreferences(),
       loadPreferredBuddies(),
+      loadCurrentUser(),
+      getComputedReliability(activeUserId),
     ]);
 
   const parsedJobs = jobsRaw ? JSON.parse(jobsRaw) : [];
   const safeJobs: Job[] = Array.isArray(parsedJobs) ? parsedJobs : [];
   const acceptedJobs = safeJobs.filter((job: Job) => isActiveJobStatus(job.status));
   const completedJobs = safeJobs.filter((job: Job) => job.status === 'completed');
-  const ownPostedJobs = getActiveOwnJobs(safeJobs, getActiveDevUserId());
+  const ownPostedJobs = getActiveOwnJobs(safeJobs, activeUserId);
   const parsedScore = scoreRaw ? Number(scoreRaw) : 0;
   const wallet = await loadWalletSnapshot(completedJobs);
 
@@ -70,6 +74,8 @@ const loadProfileSnapshot = async (): Promise<ProfileSnapshot> => {
     profileImageUri: userProfile.profileImageUri,
     bio: userProfile.bio,
     wallet,
+    displayName: currentUser.displayName,
+    reliabilitySignal,
   };
 };
 
@@ -87,6 +93,8 @@ export default function ProfileScreen() {
   const [preferredBuddies, setPreferredBuddies] = useState<PreferredBuddy[]>([]);
   const [profileImageUri, setProfileImageUri] = useState<string | null>(null);
   const [bio, setBio] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [reliabilitySignal, setReliabilitySignal] = useState<ReliabilitySignal>('new');
   const [isLoading, setIsLoading] = useState(true);
   const [isCompletedJobsExpanded, setIsCompletedJobsExpanded] = useState(false);
   const [wallet, setWallet] = useState<WalletSnapshot>(createEmptyWalletSnapshot());
@@ -105,6 +113,8 @@ export default function ProfileScreen() {
       setPreferredBuddies(snapshot.preferredBuddies);
       setProfileImageUri(snapshot.profileImageUri);
       setBio(snapshot.bio);
+      setDisplayName(snapshot.displayName);
+      setReliabilitySignal(snapshot.reliabilitySignal);
       setWallet(snapshot.wallet);
     } catch (error) {
       console.error('Fehler beim Laden des Profils:', error);
@@ -127,66 +137,6 @@ export default function ProfileScreen() {
       loadProfileData();
     }, [])
   );
-
-  const openChat = (job: Job) => {
-    if (!isJobChatAccessible(job)) {
-      return;
-    }
-
-    router.push({
-      pathname: '/chat',
-      params: {
-        jobId: job.id,
-        problem: job.problem,
-        price: job.price,
-        time: job.time,
-        timeMode: job.timeMode,
-        creatorName: job.creatorName || i18n.t('common.default_user_name'),
-        currentUserRole: 'buddy',
-      },
-    });
-  };
-
-  const completeJob = async (job: Job) => {
-    try {
-      const jobsRaw = await AsyncStorage.getItem('jobs');
-      const parsedJobs = jobsRaw ? JSON.parse(jobsRaw) : [];
-      const safeJobs: Job[] = Array.isArray(parsedJobs) ? parsedJobs : [];
-
-      const updatedJobs = safeJobs.map((j) =>
-        j.id === job.id
-          ? {
-              ...j,
-              status: 'completed' as const,
-              payment: applyPaymentStateForJobStatus(
-                ensureJobPaymentState(j),
-                'completed'
-              ),
-            }
-          : j
-      );
-
-      const scoreRaw = await AsyncStorage.getItem('buddyScore');
-      const currentScore = scoreRaw ? Number(scoreRaw) : 0;
-      const updatedScore = currentScore + getBuddyPointsForJob(job);
-
-      await AsyncStorage.setItem('jobs', JSON.stringify(updatedJobs));
-      await AsyncStorage.setItem('buddyScore', updatedScore.toString());
-      await recordJobCompletionEarning(job);
-
-      loadProfileData(); // Reload to update the lists
-      router.push({
-        pathname: '/review/[jobId]',
-        params: {
-          jobId: job.id,
-          currentUserRole: 'buddy',
-        },
-      });
-    } catch (error) {
-      console.error('Error completing job:', error);
-      alert(i18n.t('job.job_complete_error'));
-    }
-  };
 
   const switchLanguage = async (lang: 'de' | 'en') => {
     setLanguage(lang);
@@ -345,7 +295,9 @@ export default function ProfileScreen() {
               {profileImageUri ? (
                 <Image source={{ uri: profileImageUri }} style={styles.avatarImage} />
               ) : (
-                <Text style={styles.avatarText}>V</Text>
+                <Text style={styles.avatarText}>
+                  {(displayName || activeUser.name).charAt(0).toUpperCase()}
+                </Text>
               )}
             </View>
             <View style={styles.avatarEditBadge}>
@@ -355,7 +307,7 @@ export default function ProfileScreen() {
 
           <View style={styles.identityMeta}>
             <Text style={styles.name} numberOfLines={1}>
-              Vincent
+              {displayName || activeUser.name}
             </Text>
             <Text style={styles.identitySubtitle} numberOfLines={2}>
               {i18n.t('profile.identity_subtitle')}
@@ -411,6 +363,19 @@ export default function ProfileScreen() {
                 <Text style={styles.topBuddyBadgeText}>{i18n.t('feed.top_buddy_badge')}</Text>
               </View>
             )}
+            <View style={[
+              styles.reliabilityBadge,
+              reliabilitySignal === 'trusted' && styles.reliabilityBadgeTrusted,
+              reliabilitySignal === 'steady' && styles.reliabilityBadgeSteady,
+            ]}>
+              <Text style={[
+                styles.reliabilityBadgeText,
+                reliabilitySignal === 'trusted' && styles.reliabilityBadgeTextTrusted,
+                reliabilitySignal === 'steady' && styles.reliabilityBadgeTextSteady,
+              ]}>
+                {i18n.t(`job.trust_reliability_${reliabilitySignal}`)}
+              </Text>
+            </View>
           </View>
         </View>
       </View>
@@ -573,7 +538,7 @@ export default function ProfileScreen() {
         onPress={() => router.push('/my-posted-jobs')}
       >
         <View style={styles.activeJobsHeaderLeft}>
-          <Text style={styles.activeJobsTitle}>Meine Aufträge</Text>
+          <Text style={styles.activeJobsTitle}>{i18n.t('profile.my_posted_jobs')}</Text>
           {ownPostedJobs.length > 0 && (
             <View style={styles.activeJobsCountBadge}>
               <Text style={styles.activeJobsCountText}>{ownPostedJobs.length}</Text>
@@ -601,16 +566,24 @@ export default function ProfileScreen() {
         <Text style={styles.sectionTitle}>{i18n.t('profile.review_summary')}</Text>
         {reviewCount > 0 ? (
           <>
-            <Text style={styles.info}>
-              {i18n.t('profile.average_rating', {
-                rating: averageRating.toFixed(1),
-              })}
-            </Text>
-            <Text style={styles.info}>
-              {i18n.t('profile.total_reviews', { count: reviewCount })}
-            </Text>
+            <View style={styles.reviewRatingRow}>
+              <Text style={styles.reviewRatingNumber}>{averageRating.toFixed(1)}</Text>
+              <View style={styles.reviewRatingMeta}>
+                <Text style={styles.reviewStarsLarge}>
+                  {'★'.repeat(Math.round(averageRating))}{'☆'.repeat(5 - Math.round(averageRating))}
+                </Text>
+                <Text style={styles.reviewRatingCount}>
+                  {i18n.t('profile.total_reviews', { count: reviewCount })}
+                </Text>
+              </View>
+              {isTopBuddy(averageRating, reviewCount) && (
+                <View style={styles.topBuddyBadge}>
+                  <Text style={styles.topBuddyBadgeText}>{i18n.t('feed.top_buddy_badge')}</Text>
+                </View>
+              )}
+            </View>
             {recentReviews.length > 0 && (
-              <View style={styles.recentReviews}>
+              <View>
                 <Text style={styles.recentReviewsTitle}>
                   {i18n.t('profile.recent_reviews')}
                 </Text>
@@ -622,10 +595,8 @@ export default function ProfileScreen() {
                     <Text style={styles.reviewMeta}>
                       {i18n.t('profile.review_by', {
                         name: entry.review?.reviewerName ?? i18n.t('common.default_user_name'),
-                      })}{' '}
-                      {i18n.t('profile.reviewed_on', {
-                        date: formatReviewDate(entry.review?.reviewedAt ?? new Date().toISOString()),
-                      })}
+                      })}{' · '}
+                      {formatReviewDate(entry.review?.reviewedAt ?? new Date().toISOString())}
                     </Text>
                     {entry.review?.reviewText ? (
                       <Text style={styles.reviewText}>{entry.review.reviewText}</Text>
@@ -810,29 +781,15 @@ export default function ProfileScreen() {
       )}
 
       <View style={styles.card}>
-        <Text style={styles.sectionTitle}>{i18n.t('preferences.title')}</Text>
-        <Text style={styles.preferenceSummary}>
-          {preferences && preferences.onboardingCompleted
-            ? i18n.t('profile.preferences_ready')
-            : i18n.t('profile.preferences_not_set')}
-        </Text>
+        <Text style={styles.sectionTitle}>{i18n.t('profile.settings')}</Text>
 
         <Pressable
-          style={styles.preferencesButton}
-          onPress={() =>
-            router.push({ pathname: '/preferences', params: { mode: 'settings' } })
-          }
+          style={styles.settingRow}
+          onPress={() => router.push('/edit-display-name')}
         >
-          <Text style={styles.preferencesButtonText}>
-            {preferences && preferences.onboardingCompleted
-              ? i18n.t('profile.edit_preferences')
-              : i18n.t('profile.setup_preferences')}
-          </Text>
+          <Text style={styles.settingText}>{i18n.t('profile.edit_name')}</Text>
+          <Text style={styles.settingChevron}>›</Text>
         </Pressable>
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>{i18n.t('profile.settings')}</Text>
 
         <Pressable
           style={styles.settingRow}
@@ -876,6 +833,7 @@ export default function ProfileScreen() {
         </Pressable>
 
         <View style={styles.languageWrap}>
+
           <Text style={styles.languageTitle}>{i18n.t('profile.language')}</Text>
 
           <View style={styles.languageButtons}>
@@ -914,6 +872,19 @@ export default function ProfileScreen() {
             </Pressable>
           </View>
         </View>
+
+        <Pressable
+          style={styles.logoutRow}
+          onPress={() =>
+            Alert.alert(
+              i18n.t('profile.logout'),
+              i18n.t('profile.logout_coming_soon')
+            )
+          }
+        >
+          <Text style={styles.logoutText}>{i18n.t('profile.logout')}</Text>
+          <Text style={styles.logoutHint}>{i18n.t('profile.logout_hint')}</Text>
+        </Pressable>
       </View>
 
       <View style={styles.devCard}>
@@ -1816,5 +1787,77 @@ const styles = StyleSheet.create({
     color: '#7777aa',
     fontFamily: 'monospace',
     lineHeight: 18,
+  },
+  reliabilityBadge: {
+    borderRadius: 999,
+    paddingVertical: 2,
+    paddingHorizontal: spacing.sm,
+    backgroundColor: colors.lightGrey,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  reliabilityBadgeSteady: {
+    backgroundColor: colors.veryLightPurple,
+    borderColor: colors.overlayLightPurple,
+  },
+  reliabilityBadgeTrusted: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#86EFAC',
+  },
+  reliabilityBadgeText: {
+    fontSize: 11,
+    fontWeight: '600' as const,
+    lineHeight: 16,
+    color: colors.placeholder,
+  },
+  reliabilityBadgeTextSteady: {
+    color: colors.secondary,
+  },
+  reliabilityBadgeTextTrusted: {
+    color: '#166534',
+  },
+  reviewRatingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginBottom: spacing.md,
+    paddingBottom: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.veryLightGrey2,
+  },
+  reviewRatingNumber: {
+    fontSize: 36,
+    fontWeight: '800' as const,
+    color: colors.textPrimary,
+    lineHeight: 40,
+  },
+  reviewRatingMeta: {
+    flex: 1,
+  },
+  reviewStarsLarge: {
+    fontSize: 16,
+    color: colors.yellow,
+    letterSpacing: 1,
+    lineHeight: 20,
+    marginBottom: 2,
+  },
+  reviewRatingCount: {
+    ...typography.meta,
+    color: colors.textSecondary,
+  },
+  logoutRow: {
+    paddingVertical: spacing.lg,
+    marginTop: spacing.xs,
+    borderTopWidth: 1,
+    borderTopColor: colors.veryLightGrey2,
+  },
+  logoutText: {
+    ...typography.bodyStrong,
+    color: colors.placeholder,
+  },
+  logoutHint: {
+    ...typography.meta,
+    color: colors.placeholder,
+    marginTop: spacing.xs,
   },
 });

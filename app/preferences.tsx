@@ -16,6 +16,7 @@ import {
     saveUserPreferences,
     UserPreferences,
 } from '../lib/preferences';
+import { loadCurrentUser, patchCurrentUser } from '../lib/current-user';
 import { layout, spacing } from '../lib/spacing';
 import { typography } from '../lib/typography';
 import { loadUserProfile, updateUserProfile } from '../lib/user-profile';
@@ -29,6 +30,8 @@ export default function PreferencesScreen() {
   const params = useLocalSearchParams<{ mode?: string }>();
   const [prefs, setPrefs] = useState<UserPreferences>(DEFAULT_USER_PREFERENCES);
   const [bio, setBio] = useState('');
+  const [displayName, setDisplayName] = useState('');
+  const [referralSource, setReferralSource] = useState('');
   const [isSaving, setIsSaving] = useState(false);
 
   const requestedMode: PreferencesMode | null =
@@ -45,10 +48,15 @@ export default function PreferencesScreen() {
 
   useEffect(() => {
     const load = async () => {
-      const loaded = await loadUserPreferences();
-      const userProfile = await loadUserProfile();
+      const [loaded, userProfile, currentUser] = await Promise.all([
+        loadUserPreferences(),
+        loadUserProfile(),
+        loadCurrentUser(),
+      ]);
       setPrefs(loaded);
       setBio(userProfile.bio);
+      setDisplayName(currentUser.displayName);
+      setReferralSource(currentUser.referralSource ?? '');
     };
     load();
   }, []);
@@ -88,12 +96,20 @@ export default function PreferencesScreen() {
   const save = async () => {
     setIsSaving(true);
     try {
-      const toSave: UserPreferences = {
-        ...prefs,
-        onboardingCompleted: true,
-      };
-      await saveUserPreferences(toSave);
-      await updateUserProfile({ bio });
+      const toSave: UserPreferences = { ...prefs, onboardingCompleted: true };
+      await Promise.all([
+        saveUserPreferences(toSave),
+        updateUserProfile({ bio }),
+        patchCurrentUser({
+          displayName: displayName.trim(),
+          bio: bio.trim() || undefined,
+          skills: prefs.skills,
+          interests: prefs.preferredCategories,
+          radius: prefs.radius,
+          referralSource: referralSource.trim() || undefined,
+          onboardingCompleted: true,
+        }),
+      ]);
       if (isOnboardingMode) {
         router.replace('/(tabs)');
       } else {
@@ -150,6 +166,20 @@ export default function PreferencesScreen() {
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>{i18n.t('preferences.name_title')}</Text>
+          <Text style={styles.sectionHint}>{i18n.t('preferences.name_hint')}</Text>
+          <TextInput
+            style={styles.textInput}
+            value={displayName}
+            onChangeText={setDisplayName}
+            placeholder={i18n.t('preferences.name_placeholder')}
+            placeholderTextColor={colors.placeholder}
+            autoCapitalize="words"
+            returnKeyType="done"
+          />
+        </View>
+
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>{i18n.t('preferences.skills_title')}</Text>
           {isOnboardingMode && (
@@ -219,28 +249,27 @@ export default function PreferencesScreen() {
           </View>
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>{i18n.t('preferences.availability_title')}</Text>
-          {isOnboardingMode && (
-            <Text style={styles.sectionHint}>{i18n.t('preferences.availability_hint')}</Text>
-          )}
-          <View style={styles.chipsWrap}>
-            {AVAILABILITY_SLOTS.map((slot) => {
-              const selected = prefs.availability.includes(slot);
-              return (
-                <Pressable
-                  key={`availability-${slot}`}
-                  style={[styles.chip, selected && styles.chipActive]}
-                  onPress={() => toggleAvailability(slot)}
-                >
-                  <Text style={[styles.chipText, selected && styles.chipTextActive]}>
-                    {availabilityLabel[slot]}
-                  </Text>
-                </Pressable>
-              );
-            })}
+        {!isOnboardingMode && (
+          <View style={styles.card}>
+            <Text style={styles.sectionTitle}>{i18n.t('preferences.availability_title')}</Text>
+            <View style={styles.chipsWrap}>
+              {AVAILABILITY_SLOTS.map((slot) => {
+                const selected = prefs.availability.includes(slot);
+                return (
+                  <Pressable
+                    key={`availability-${slot}`}
+                    style={[styles.chip, selected && styles.chipActive]}
+                    onPress={() => toggleAvailability(slot)}
+                  >
+                    <Text style={[styles.chipText, selected && styles.chipTextActive]}>
+                      {availabilityLabel[slot]}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </View>
           </View>
-        </View>
+        )}
 
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>{i18n.t('preferences.radius_title')}</Text>
@@ -263,21 +292,36 @@ export default function PreferencesScreen() {
         </View>
 
         {isOnboardingMode && (
-          <View style={styles.card}>
-            <Text style={styles.sectionTitle}>{i18n.t('preferences.about_me_title')}</Text>
-            <Text style={styles.sectionHint}>{i18n.t('preferences.about_me_hint')}</Text>
-            <TextInput
-              style={styles.bioInput}
-              value={bio}
-              onChangeText={setBio}
-              multiline
-              maxLength={bioCharacterLimit}
-              textAlignVertical="top"
-              placeholder={i18n.t('profile.about_me_placeholder')}
-              placeholderTextColor={colors.placeholder}
-            />
-            <Text style={styles.bioCounter}>{bio.length}/{bioCharacterLimit}</Text>
-          </View>
+          <>
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>{i18n.t('preferences.about_me_title')}</Text>
+              <Text style={styles.sectionHint}>{i18n.t('preferences.about_me_hint')}</Text>
+              <TextInput
+                style={styles.bioInput}
+                value={bio}
+                onChangeText={setBio}
+                multiline
+                maxLength={bioCharacterLimit}
+                textAlignVertical="top"
+                placeholder={i18n.t('profile.about_me_placeholder')}
+                placeholderTextColor={colors.placeholder}
+              />
+              <Text style={styles.bioCounter}>{bio.length}/{bioCharacterLimit}</Text>
+            </View>
+
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>{i18n.t('preferences.referral_title')}</Text>
+              <Text style={styles.sectionHint}>{i18n.t('preferences.referral_hint')}</Text>
+              <TextInput
+                style={styles.textInput}
+                value={referralSource}
+                onChangeText={setReferralSource}
+                placeholder={i18n.t('preferences.referral_placeholder')}
+                placeholderTextColor={colors.placeholder}
+                returnKeyType="done"
+              />
+            </View>
+          </>
         )}
       </ScrollView>
 
@@ -415,6 +459,16 @@ const styles = StyleSheet.create({
     textAlign: 'right',
     ...typography.meta,
     color: colors.textSecondary,
+  },
+  textInput: {
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
+    borderRadius: layout.borderRadiusSmall,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    ...typography.body,
+    color: colors.textPrimary,
+    backgroundColor: colors.veryLightGrey,
   },
   footer: {
     paddingTop: spacing.md,

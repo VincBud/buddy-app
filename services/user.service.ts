@@ -24,6 +24,12 @@ import {
   saveUserPreferences,
   UserPreferences,
 } from '../lib/preferences';
+import {
+  loadCurrentUser,
+  saveCurrentUser,
+  patchCurrentUser,
+} from '../lib/current-user';
+import { BuddyUser } from '../lib/user-model';
 import { STORAGE_KEYS } from '../lib/storage-keys';
 
 export const getUserProfile = async (_userId?: string): Promise<UserProfile> => {
@@ -115,4 +121,24 @@ export const incrementReliabilityStats = async (
 export const getComputedReliability = async (userId: string): Promise<ReliabilitySignal> => {
   const stats = await getReliabilityStats(userId);
   return getReliabilityStatus(stats);
+};
+
+// ─── Current user (BuddyUser) ─────────────────────────────────────────────────
+
+export const getCurrentUser = async (_userId?: string): Promise<BuddyUser> => {
+  return loadCurrentUser();
+};
+
+export const setCurrentUser = async (
+  user: BuddyUser,
+  _userId?: string
+): Promise<void> => {
+  return saveCurrentUser(user);
+};
+
+export const updateCurrentUser = async (
+  updates: Partial<BuddyUser>,
+  _userId?: string
+): Promise<BuddyUser> => {
+  return patchCurrentUser(updates);
 };
