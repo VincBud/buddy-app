@@ -13,18 +13,18 @@ export function SectionProblem() {
           <div className="sm:col-span-7">
             <p className="text-lg leading-relaxed text-ink/75">
               Möbel aufbauen, WLAN reparieren, kurz zum Bahnhof fahren, beim
-              Umzug eine extra Hand — die kleinen Probleme häufen sich, aber
-              es gibt keinen guten Ort, an dem man sie schnell und sicher
-              loswird.
+              Umzug eine extra Hand — die typischen Alltagsprobleme häufen
+              sich, aber es gibt keinen guten Ort, um schnell einen Helfer
+              in der Nähe zu finden.
             </p>
             <p className="mt-4 text-lg leading-relaxed text-ink/75">
-              Freundeskreis fragen ist umständlich. Plattformen sind teuer,
-              langsam und anonym. Nachbarschafts-Apps sind voll mit
-              gelöschten Beiträgen statt echter Hilfe.
+              Freundeskreis fragen ist umständlich. Klassische Plattformen
+              sind teuer, langsam und anonym. Nachbarschafts-Apps sind voll
+              mit gelöschten Beiträgen statt echter Hilfe.
             </p>
             <ul className="mt-8 space-y-3">
-              <Pain>Stundenlanges Suchen statt erledigen lassen.</Pain>
-              <Pain>Keine Klarheit über Preis und Verfügbarkeit.</Pain>
+              <Pain>Stundenlanges Suchen statt Alltagsprobleme einfach lösen.</Pain>
+              <Pain>Keine Klarheit über Preis, Radius und Verfügbarkeit.</Pain>
               <Pain>Kein Vertrauen — wer steht eigentlich vor meiner Tür?</Pain>
             </ul>
           </div>

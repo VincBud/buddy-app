@@ -3,25 +3,25 @@ const STEPS = [
     n: "01",
     title: "Problem posten",
     body:
-      "Beschreibe in wenigen Sätzen, was du brauchst. Lege Budget und Radius fest. Fertig in unter einer Minute.",
+      "Beschreibe in wenigen Sätzen, was du brauchst. Lege Preis und Radius fest. Fertig in unter einer Minute.",
   },
   {
     n: "02",
-    title: "Buddies bewerben sich",
+    title: "Verifizierte Buddies bewerben sich",
     body:
-      "Verifizierte Nachbarn in deinem Radius sehen dein Problem und melden sich — meist in Minuten.",
+      "Verifizierte Helfer:innen in deiner Nachbarschaft sehen dein Problem und melden sich — meist in Minuten.",
   },
   {
     n: "03",
-    title: "Du wählst",
+    title: "Helfer auswählen",
     body:
-      "Profil, Bewertungen, Preis: Du entscheidest, mit wem du arbeitest. Niemand bekommt deine Daten ohne Auswahl.",
+      "Profil, Bewertungen, Preis: Du entscheidest, wer kommt. Niemand bekommt deine Adresse ohne Auswahl.",
   },
   {
     n: "04",
     title: "Chat & Done",
     body:
-      "Sobald du gewählt hast, öffnet sich der direkte Chat. Treffpunkt klären, Job erledigen, beidseitig bestätigen.",
+      "Sobald du ausgewählt hast, öffnet sich der direkte Chat. Treffpunkt klären, Aufgabe erledigen, beidseitig bestätigen.",
   },
 ] as const;
 
@@ -34,11 +34,12 @@ export function SectionHowItWorks() {
             So funktioniert&apos;s
           </p>
           <h2 className="text-display-2 text-paper">
-            Vier Schritte zwischen Problem und Lösung.
+            Vier Schritte zwischen Alltagsproblem und Lösung.
           </h2>
           <p className="mt-5 text-lg leading-relaxed text-paper/70">
-            Buddy ist ein Marktplatz, kein Verzeichnis. Du sagst was du brauchst,
-            die Buddies kommen zu dir — nicht umgekehrt.
+            Buddy ist ein hyperlokaler Marktplatz, kein Verzeichnis. Du sagst,
+            was du brauchst — verifizierte Buddies aus der Nachbarschaft
+            kommen zu dir.
           </p>
         </div>
 

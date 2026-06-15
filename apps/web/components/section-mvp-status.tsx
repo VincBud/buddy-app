@@ -1,7 +1,25 @@
 const ITEMS = [
-  { phase: "Phase 1", title: "MVP", state: "done", text: "Kern­flow getestet: posten, bewerben, wählen, chatten, bewerten." },
-  { phase: "Phase 2", title: "Pilot", state: "active", text: "Pilotregion wird vorbereitet, Operations-Setup läuft." },
-  { phase: "Phase 3", title: "Early Access", state: "next", text: "Schrittweise Öffnung — Wartelisten-Plätze werden eingeladen." },
+  {
+    phase: "Phase 1",
+    title: "MVP",
+    state: "done",
+    text:
+      "Kern­flow getestet: Problem posten, Helfer bewerben sich, du wählst, Chat, Bewertung.",
+  },
+  {
+    phase: "Phase 2",
+    title: "München-Pilot",
+    state: "active",
+    text:
+      "Pilot in München in Vorbereitung — Verifizierung, Support und Operations werden ausgerollt.",
+  },
+  {
+    phase: "Phase 3",
+    title: "Deutschland Early Access",
+    state: "active",
+    text:
+      "Early Access geöffnet — wir laden Wartelisten-Plätze schrittweise nach Region und Rolle ein.",
+  },
 ] as const;
 
 export function SectionMvpStatus() {
@@ -11,12 +29,14 @@ export function SectionMvpStatus() {
         <div className="max-w-3xl">
           <p className="eyebrow mb-4">Aktueller Stand</p>
           <h2 className="text-display-2 text-ink">
-            MVP getestet, Pilot in Vorbereitung, Early Access öffnet bald.
+            MVP getestet, Pilot in Vorbereitung, Early Access geöffnet.
           </h2>
           <p className="mt-5 text-lg leading-relaxed text-ink/70">
             Wir bauen Buddy aktuell mit einer kleinen Gruppe aus der Praxis
-            heraus. Was wir <em>nicht</em> tun: blind skalieren. Was wir tun:
-            jeden Job verstehen, jeden Bug fixen, jede Wartelisten-Anmeldung lesen.
+            heraus, beginnend mit dem München-Pilot. Was wir <em>nicht</em>{" "}
+            tun: blind skalieren oder einen App-Store-Launch versprechen. Was
+            wir tun: jeden Job verstehen, jeden Bug fixen, jede Wartelisten-Anmeldung
+            lesen.
           </p>
         </div>
 

@@ -100,9 +100,10 @@ export function SectionWaitlist() {
               Sei beim Early Access dabei.
             </h2>
             <p className="mt-5 text-lg leading-relaxed text-ink/70">
-              Wir öffnen Buddy schrittweise. Trage dich ein, wir melden uns,
-              sobald deine Region und deine Rolle dran sind — kein Spam, kein
-              Newsletter, ein Hinweis pro Phase.
+              Buddy startet mit dem München-Pilot und öffnet schrittweise in
+              ganz Deutschland. Trage dich ein, wir melden uns, sobald deine
+              Region und deine Rolle dran sind — kein Spam, ein Hinweis pro
+              Phase.
             </p>
           </div>
 

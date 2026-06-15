@@ -14,15 +14,17 @@ export function SiteHeader() {
           </span>
         </Link>
 
-        <nav className="hidden items-center gap-7 text-sm font-medium text-smoke sm:flex">
+        <nav aria-label="Hauptnavigation" className="hidden items-center gap-7 text-sm font-medium text-smoke sm:flex">
           <a className="hover:text-ink" href="#problem">Problem</a>
           <a className="hover:text-ink" href="#how-it-works">So funktioniert&apos;s</a>
           <a className="hover:text-ink" href="#safety">Sicherheit</a>
           <a className="hover:text-ink" href="#status">Status</a>
+          <a className="hover:text-ink" href="#faq">FAQ</a>
         </nav>
 
         <a
           href="#waitlist"
+          aria-label="Auf die Buddy-Warteliste eintragen"
           className="inline-flex h-10 items-center rounded-full bg-ink px-4 text-sm font-semibold text-paper transition hover:bg-purple"
         >
           Auf die Warteliste

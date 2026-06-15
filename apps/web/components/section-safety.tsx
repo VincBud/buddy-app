@@ -32,9 +32,10 @@ export function SectionSafety() {
               Wer dir hilft, ist kein Zufall.
             </h2>
             <p className="mt-5 text-lg leading-relaxed text-ink/70">
-              Buddy ist nur so gut wie das Vertrauen, das wir aufbauen. Deshalb
-              sind Identität, Auswahl und Bewertung keine optionalen Extras —
-              sondern die Basis.
+              Lokale Hilfe funktioniert nur mit Vertrauen. Deshalb sind
+              Identitäts-Verifizierung, Auswahl und beidseitige Bewertung bei
+              Buddy keine optionalen Extras — sondern die Basis jeder
+              Nachbarschafts-Hilfe.
             </p>
           </div>
 
