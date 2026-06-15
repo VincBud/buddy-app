@@ -1,16 +1,34 @@
 /**
  * Thin wrapper around the Persona React Native SDK.
  *
- * The SDK is loaded via a runtime require() guarded by try/catch so the rest
- * of the app keeps building when the native module isn't installed yet
- * (typical during Phase 4 rollout — the JS screen lands first, the Persona
- * pods/AAR follow after a dev runs `npm install` + a native rebuild).
+ * IMPORTANT — Expo Go / out-of-date dev build safety:
  *
- * Install (see also docs/PERSONA_SDK_SETUP.md if present):
+ * The Persona SDK's CJS entry executes
+ *     const eventEmitter = new NativeEventEmitter(PersonaInquiry2);
+ * at module load. When `PersonaInquiry2` is not registered as a native
+ * module (Expo Go, or a dev build created before `react-native-persona`
+ * was added), the NativeEventEmitter constructor throws an Invariant
+ * Violation BEFORE `require()` returns — and Metro keeps re-throwing on
+ * every subsequent require() of the same id, even from inside a try/catch.
+ *
+ * The only correct guard is to probe `NativeModules.PersonaInquiry2` BEFORE
+ * `require('react-native-persona')` is ever evaluated. If the native
+ * module isn't linked we return null immediately and never touch the
+ * package. Once a real dev build is created (pods installed +
+ * `expo run:ios` / `run:android`), the probe succeeds and the SDK loads
+ * normally.
+ *
+ * Install:
  *   npm install react-native-persona
+ *   npx expo prebuild --clean       # if you don't already have ios/android
  *   cd ios && pod install && cd ..
- *   npx expo run:ios   # or expo prebuild for managed -> bare migration
+ *   npx expo run:ios                # full native rebuild
+ *   # JS-only reload / Expo Go cannot pick up native modules.
  */
+
+import { NativeModules, Platform } from 'react-native';
+
+const PERSONA_NATIVE_MODULE_NAME = 'PersonaInquiry2';
 
 export type PersonaLaunchInput = {
   inquiryId: string;
@@ -31,9 +49,12 @@ export type PersonaLaunchResult =
  */
 export const isPersonaSdkAvailable = (): boolean => {
   const mod = loadPersonaModule();
-  console.log('[IDENTITY_VERIFICATION] persona-sdk: module resolved =', !!mod,
-    'keys =', mod ? Object.keys(mod as object).join(',') : '(none)');
-  return mod !== null;
+  const available = mod !== null;
+  console.log('[IDENTITY_VERIFICATION] isPersonaSdkAvailable =', available, {
+    platform: Platform.OS,
+    keys: mod ? Object.keys(mod as object).join(',') : '(none)',
+  });
+  return available;
 };
 
 /**
@@ -118,23 +139,76 @@ export const launchPersonaInquiry = async (
 // Cached require result so we don't try to resolve the module on every call.
 let cachedModule: unknown | null | undefined;
 
+/**
+ * True iff the `PersonaInquiry2` native module is registered in this
+ * runtime. We probe NativeModules directly so we can decide whether
+ * touching `require('react-native-persona')` is safe — the package's
+ * top-level code throws on Expo Go / unrebuilt dev builds.
+ */
+const isPersonaNativeModuleLinked = (): boolean => {
+  try {
+    const mod = (NativeModules as Record<string, unknown>)[PERSONA_NATIVE_MODULE_NAME];
+    return mod != null;
+  } catch {
+    return false;
+  }
+};
+
 const loadPersonaModule = (): { default?: unknown; Inquiry?: unknown } | null => {
   if (cachedModule !== undefined) {
     return (cachedModule as { default?: unknown; Inquiry?: unknown } | null);
   }
+
+  const nativeLinked = isPersonaNativeModuleLinked();
+  const personaNativeKeys = (() => {
+    try {
+      return Object.keys(NativeModules ?? {}).filter((k) =>
+        k.toLowerCase().includes('persona'),
+      );
+    } catch {
+      return [] as string[];
+    }
+  })();
+  const devFlag = typeof __DEV__ !== 'undefined' ? __DEV__ : null;
+
+  if (!nativeLinked) {
+    // Critical short-circuit: do NOT call require('react-native-persona').
+    // Its CJS entry constructs `new NativeEventEmitter(PersonaInquiry2)` at
+    // module load — which throws an uncatchable Invariant Violation when
+    // PersonaInquiry2 is undefined.
+    console.log('[IDENTITY_VERIFICATION] persona-sdk: native module NOT linked', {
+      platform: Platform.OS,
+      dev: devFlag,
+      expected_native_module: PERSONA_NATIVE_MODULE_NAME,
+      persona_native_module_keys: personaNativeKeys,
+      hint:
+        'Likely cause: running inside Expo Go OR a dev build created before ' +
+        '`react-native-persona` was added. Rebuild the dev client (see header comment).',
+    });
+    cachedModule = null;
+    return null;
+  }
+
   try {
     // eslint-disable-next-line @typescript-eslint/no-require-imports
     const mod = require('react-native-persona');
     cachedModule = mod ?? null;
-    console.log('[IDENTITY_VERIFICATION] require("react-native-persona") OK',
-      'type =', typeof mod,
-      'keys =', mod ? Object.keys(mod).join(',') : '(none)');
+    console.log('[IDENTITY_VERIFICATION] persona-sdk: require OK', {
+      platform: Platform.OS,
+      dev: devFlag,
+      type: typeof mod,
+      keys: mod ? Object.keys(mod).join(',') : '(none)',
+    });
     return cachedModule as { default?: unknown; Inquiry?: unknown } | null;
   } catch (e) {
-    console.log('[IDENTITY_VERIFICATION] require("react-native-persona") FAILED');
-    console.log('[IDENTITY_VERIFICATION]   name:', e instanceof Error ? e.name : typeof e);
-    console.log('[IDENTITY_VERIFICATION]   message:', e instanceof Error ? e.message : String(e));
-    console.log('[IDENTITY_VERIFICATION]   stack:', e instanceof Error ? e.stack : '(no stack)');
+    // Defensive — should be unreachable now that we probe NativeModules first.
+    console.log('[IDENTITY_VERIFICATION] persona-sdk: require FAILED unexpectedly', {
+      platform: Platform.OS,
+      dev: devFlag,
+      name: e instanceof Error ? e.name : typeof e,
+      message: e instanceof Error ? e.message : String(e),
+      stack: e instanceof Error ? e.stack : '(no stack)',
+    });
     cachedModule = null;
     return null;
   }

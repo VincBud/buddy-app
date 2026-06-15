@@ -66,6 +66,20 @@ export default function IdentityVerificationScreen() {
       setCooldownSeconds(0);
       setPhase('launching');
 
+      // HARD GATE — do not create a Persona inquiry (and do not bump the
+      // server-side retry counter) when the native module cannot launch in
+      // this runtime. Without this gate, hitting "Start" inside Expo Go
+      // would still create an inquiry on Persona's side that we could never
+      // open, and would consume one of the user's daily retry attempts.
+      const sdkAvailable = isPersonaSdkAvailable();
+      console.log('[IDENTITY_VERIFICATION] preflight isPersonaSdkAvailable() =', sdkAvailable);
+      if (!sdkAvailable) {
+        console.log('[IDENTITY_VERIFICATION] skipping create-persona-inquiry: SDK unavailable');
+        setPhase('error');
+        mapError('verification.errors.sdk_unavailable');
+        return;
+      }
+
       console.log('[IDENTITY_VERIFICATION] calling startVerificationInquiry()…');
       const outcome = await startVerificationInquiry();
       console.log('[IDENTITY_VERIFICATION] startVerificationInquiry outcome:', JSON.stringify(outcome, null, 2));
@@ -111,18 +125,20 @@ export default function IdentityVerificationScreen() {
       }
 
       if (!result.inquiryId) {
+        // The Edge Function accepted the request but didn't hand us an
+        // inquiry_id. Without it, the SDK has nothing to resume into —
+        // surface a server error rather than blindly invoking the SDK.
         console.log('[IDENTITY_VERIFICATION] missing inquiry_id in successful response — bailing');
         setPhase('error');
         mapError('verification.errors.server');
         return;
       }
 
-      const sdkAvailable = isPersonaSdkAvailable();
-      console.log('[IDENTITY_VERIFICATION] isPersonaSdkAvailable() =', sdkAvailable);
-      if (!sdkAvailable) {
-        setPhase('error');
-        mapError('verification.errors.sdk_unavailable');
-        return;
+      // session_token is optional for `Inquiry.fromInquiry(id)` — Persona
+      // accepts the inquiry-id-only path. We just log so an unexpected
+      // missing token is visible during diagnostics.
+      if (!result.sessionToken) {
+        console.log('[IDENTITY_VERIFICATION] session_token is null — launching SDK with inquiry_id only (supported by Inquiry.fromInquiry)');
       }
 
       setPhase('in_sdk');
