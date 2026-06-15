@@ -16,7 +16,7 @@ export function SiteFooter() {
         <nav aria-label="Rechtliches" className="flex items-center gap-6 text-sm text-smoke">
           <Link className="hover:text-ink" href="/impressum">Impressum</Link>
           <Link className="hover:text-ink" href="/datenschutz">Datenschutz</Link>
-          <a className="hover:text-ink" href="mailto:hello@get-buddy.com">Kontakt</a>
+          <a className="hover:text-ink" href="mailto:vincent@get-buddy.com">Kontakt</a>
         </nav>
       </div>
     </footer>
