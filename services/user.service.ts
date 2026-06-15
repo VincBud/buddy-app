@@ -64,6 +64,7 @@ export const setUserPreferences = async (
 };
 
 export const getBuddyScore = async (_userId?: string): Promise<number> => {
+  // TODO(backend): SELECT buddy_score FROM reliability_stats WHERE user_id = auth.uid()
   try {
     const raw = await AsyncStorage.getItem(STORAGE_KEYS.BUDDY_SCORE);
     if (!raw) return 0;
@@ -78,6 +79,7 @@ export const setBuddyScore = async (
   score: number,
   _userId?: string
 ): Promise<void> => {
+  // TODO(backend): UPDATE reliability_stats SET buddy_score = $score WHERE user_id = auth.uid()
   const safe = Number.isFinite(score) && score >= 0 ? score : 0;
   await AsyncStorage.setItem(STORAGE_KEYS.BUDDY_SCORE, JSON.stringify(safe));
 };
@@ -93,6 +95,7 @@ const STATS_DEFAULTS: UserReliabilityStats = {
 const statsKey = (userId: string) => `${STORAGE_KEYS.USER_RELIABILITY_STATS}_${userId}`;
 
 export const getReliabilityStats = async (userId: string): Promise<UserReliabilityStats> => {
+  // TODO(backend): SELECT completed_jobs, cancelled_jobs, issue_count FROM reliability_stats WHERE user_id = $userId
   try {
     const raw = await AsyncStorage.getItem(statsKey(userId));
     if (!raw) return { ...STATS_DEFAULTS };
@@ -113,6 +116,7 @@ export const incrementReliabilityStats = async (
   userId: string,
   field: keyof UserReliabilityStats,
 ): Promise<void> => {
+  // TODO(backend): call supabase.rpc('increment_reliability_stat', { user_id: userId, field_name: field })
   const current = await getReliabilityStats(userId);
   const prev = typeof current[field] === 'number' ? (current[field] as number) : 0;
   await AsyncStorage.setItem(statsKey(userId), JSON.stringify({ ...current, [field]: prev + 1 }));

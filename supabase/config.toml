@@ -1,0 +1,21 @@
+# Supabase project config. The Supabase CLI reads this file when running
+# `supabase functions deploy` and other local commands.
+
+project_id = "buddy-app"
+
+# ── Edge Functions ───────────────────────────────────────────────────────────
+# persona-webhook receives Persona identity-verification events. Persona
+# does NOT send a Supabase JWT, so JWT verification must be disabled.
+# Authenticity is enforced by HMAC signature verification inside the function
+# using PERSONA_WEBHOOK_SECRET.
+
+[functions.persona-webhook]
+verify_jwt = false
+
+# create-persona-inquiry initiates a Persona inquiry on behalf of the
+# authenticated user. The Supabase JWT MUST be verified so the function can
+# trust auth.uid() as reference_id. The mobile app must send the user's
+# session JWT in the Authorization header.
+
+[functions.create-persona-inquiry]
+verify_jwt = true

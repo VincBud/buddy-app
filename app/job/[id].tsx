@@ -1,6 +1,5 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { router, Stack, useLocalSearchParams } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { router, Stack, useLocalSearchParams, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Alert,
     Image,
@@ -9,18 +8,23 @@ import {
     ScrollView,
     StyleSheet,
     Text,
+    TextInput,
     View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../lib/colors';
 import i18n, { useLanguage } from '../../lib/i18n';
-import { getActiveDevUser, getActiveDevUserId } from '../../lib/dev-session';
-import { pauseJob, requestJobApplication, repostJob, resumeJob, reviewJobApplication } from '../../lib/job-actions';
+import { getActiveUserId } from '../../lib/auth';
+import { useCurrentUser } from '../../lib/current-user';
+import { cancelJob, pauseJob, repostJob, resumeJob, submitJobRating } from '../../lib/job-actions';
+import { createJobRequest, updateJobRequest } from '../../services/job-requests.service';
+import { getNormalizedJobReviews } from '../../lib/reviews';
 import {
     canExtendJob,
     extendJobExpiry,
     getBuddyPointsForJob,
     getRemainingExtensions,
+    isChatAccessibleForJob,
     isJobEditable,
     isJobOpenForApplications,
     isJobPauseable,
@@ -45,9 +49,9 @@ import {
     incrementJobViews,
 } from '../../lib/signals';
 import { layout, spacing } from '../../lib/spacing';
-import { getReliabilityStatus } from '../../lib/trust';
-import { getReliabilityStats, incrementReliabilityStats } from '../../services/user.service';
+import { getBuddyScore } from '../../services/user.service';
 import { addNotification } from '../../services/notifications.service';
+import { loadJobs, saveJobs } from '../../services/jobs.service';
 import { typography } from '../../lib/typography';
 
 const USER_LOCATION = {
@@ -87,6 +91,7 @@ const getDistance = (
 export default function JobDetailScreen() {
   useLanguage();
   const insets = useSafeAreaInsets();
+  const { user: currentUser } = useCurrentUser();
   const params = useLocalSearchParams<{
     id?: string | string[];
     currentUserRole?: 'auftraggeber' | 'buddy' | string | string[];
@@ -102,16 +107,36 @@ export default function JobDetailScreen() {
   const [isRepostConfirmVisible, setIsRepostConfirmVisible] = useState(false);
   const [isReviewingApplication, setIsReviewingApplication] = useState(false);
   const isEnglish = String(i18n.locale).toLowerCase().startsWith('en');
+  const [toast, setToast] = useState<{ message: string; variant: 'success' | 'error' } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [ratingValue, setRatingValue] = useState<0 | 1 | 2 | 3 | 4 | 5>(0);
+  const [ratingText, setRatingText] = useState('');
+  const [isSubmittingRating, setIsSubmittingRating] = useState(false);
+  const [ratingSuccess, setRatingSuccess] = useState(false);
+  const [isApplicationFinalized, setIsApplicationFinalized] = useState(false);
 
-  // Active dev user ID — drives both the owner check and the buddy application lookup
-  const activeDevUserId = getActiveDevUserId();
-  const activeDevUser = getActiveDevUser();
+  useEffect(() => {
+    if (toast) {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      toastTimer.current = setTimeout(() => setToast(null), 2500);
+    }
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    };
+  }, [toast]);
+
+  const showToast = (message: string, variant: 'success' | 'error' = 'success') => {
+    setToast({ message, variant });
+  };
+
+  // Active user ID — drives both the owner check and the buddy application lookup
+  const activeUserId = getActiveUserId();
 
   // The active dev user's own application on this job, if any
   const localApplication = useMemo(() => {
     if (!job) return null;
-    return job.match?.applications?.find((a) => a.buddyId === activeDevUserId) ?? null;
-  }, [job, activeDevUserId]);
+    return job.match?.applications?.find((a) => a.buddyId === activeUserId) ?? null;
+  }, [job, activeUserId]);
 
   const jobId = useMemo(() => {
     if (!params.id) return '';
@@ -127,13 +152,10 @@ export default function JobDetailScreen() {
       try {
         setIsLoading(true);
 
-        const [jobsRaw, scoreRaw] = await Promise.all([
-          AsyncStorage.getItem('jobs'),
-          AsyncStorage.getItem('buddyScore'),
+        const [safeJobs, parsedScore] = await Promise.all([
+          loadJobs(),
+          getBuddyScore(),
         ]);
-        const parsedJobs = jobsRaw ? JSON.parse(jobsRaw) : [];
-        const safeJobs: Job[] = Array.isArray(parsedJobs) ? parsedJobs : [];
-        const parsedScore = scoreRaw ? Number(scoreRaw) : 0;
 
         const foundJob =
           safeJobs.find((item) => String(item.id) === String(jobId)) || null;
@@ -143,7 +165,7 @@ export default function JobDetailScreen() {
           const updatedJobs = safeJobs.map((item) =>
             String(item.id) === String(jobId) ? viewedJob : item
           );
-          await AsyncStorage.setItem('jobs', JSON.stringify(updatedJobs));
+          await saveJobs(updatedJobs);
           setJob(viewedJob);
         } else {
           setJob(null);
@@ -165,6 +187,18 @@ export default function JobDetailScreen() {
       setIsLoading(false);
     }
   }, [jobId]);
+
+  // Silently refresh job data on focus so the owner sees new applications
+  // without a full reload spinner. Skips view-count increment (initial load only).
+  useFocusEffect(
+    useCallback(() => {
+      if (!jobId) return;
+      loadJobs().then((safeJobs) => {
+        const found = safeJobs.find((item) => String(item.id) === String(jobId));
+        if (found) setJob(found);
+      }).catch(() => {/* ignore background refresh errors */});
+    }, [jobId])
+  );
 
   const getTimeBadge = (currentJob: Job) => {
     if (currentJob.timeMode === 'sofort') return i18n.t('common.asap_badge');
@@ -259,7 +293,15 @@ export default function JobDetailScreen() {
     return i18n.t('job.accept_button');
   };
 
+  const isAssignedBuddy = !!(job?.assignedBuddyId && job.assignedBuddyId === activeUserId);
+
   const getAcceptHelperText = () => {
+    // Server-backed: assignedBuddyId is set by review_job_application RPC — authoritative cross-device
+    if (isAssignedBuddy && job && isChatAccessibleForJob(job)) {
+      return isEnglish
+        ? 'Accepted — chat is now available'
+        : 'Angenommen — Chat ist jetzt verfügbar';
+    }
     if (localApplication?.requesterDecision === 'accepted') {
       return isEnglish
         ? 'Accepted — chat is now available'
@@ -304,6 +346,19 @@ export default function JobDetailScreen() {
     if (status === 'release_pending') return i18n.t('job.payout_status_release_pending');
     if (status === 'paid') return i18n.t('job.payout_status_paid');
     return null;
+  };
+
+  // Secondary hint shown under the status line while payment is reserved but not yet released
+  const getPaymentSecondaryHint = (
+    status: PaymentStatus,
+    forRequester: boolean
+  ): string | null => {
+    const isReservedState =
+      status === 'pending_authorization' || status === 'reserved';
+    if (!isReservedState) return null;
+    return forRequester
+      ? i18n.t('job.payment_after_completion_hint')
+      : i18n.t('job.payout_after_completion_hint');
   };
 
   const getBuddyRewardProgressText = (currentJob: Job): string => {
@@ -420,13 +475,11 @@ export default function JobDetailScreen() {
     const durationMs = selectedDurationMs;
     setIsExtendModalVisible(false);
     try {
-      const jobsRaw = await AsyncStorage.getItem('jobs');
-      const parsed = jobsRaw ? JSON.parse(jobsRaw) : [];
-      const safe: Job[] = Array.isArray(parsed) ? parsed : [];
+      const safe = await loadJobs();
       const updatedAll = safe.map((j) =>
         String(j.id) === String(jobId) ? extendJobExpiry(j, durationMs) : j
       );
-      await AsyncStorage.setItem('jobs', JSON.stringify(updatedAll));
+      await saveJobs(updatedAll);
       const updatedJob = updatedAll.find((j) => String(j.id) === String(jobId));
       if (updatedJob) setJob(updatedJob);
       await addNotification(
@@ -435,29 +488,27 @@ export default function JobDetailScreen() {
         i18n.t('notifications.jobExtended_message'),
         jobId
       );
+      showToast(isEnglish ? 'Runtime extended ✓' : 'Laufzeit verlängert ✓');
     } catch {
-      // fail silently — state unchanged
+      showToast(isEnglish ? 'Could not extend job.' : 'Verlängerung fehlgeschlagen.', 'error');
     }
   };
 
   const confirmCancel = async () => {
     if (!job) return;
-    const jobId = job.id;
     setIsCancelConfirmVisible(false);
     try {
-      const jobsRaw = await AsyncStorage.getItem('jobs');
-      const parsed = jobsRaw ? JSON.parse(jobsRaw) : [];
-      const safe: Job[] = Array.isArray(parsed) ? parsed : [];
-      const updatedAll = safe.map((j) =>
-        String(j.id) === String(jobId) ? { ...j, status: 'cancelled' as const } : j
-      );
-      await AsyncStorage.setItem('jobs', JSON.stringify(updatedAll));
-      await incrementReliabilityStats(activeDevUserId, 'cancelledJobs');
+      await cancelJob({
+        jobId: job.id,
+        cancelledByRole: 'auftraggeber',
+        cancelledByUserId: activeUserId,
+        reason: 'other',
+      });
       await addNotification(
         'jobCancelled',
         i18n.t('notifications.jobCancelled_title'),
         i18n.t('notifications.jobCancelled_message'),
-        jobId
+        job.id
       );
       handleBack();
     } catch {
@@ -469,20 +520,22 @@ export default function JobDetailScreen() {
     if (!job) return;
     setIsPauseConfirmVisible(false);
     try {
-      const { updatedJob } = await pauseJob({ jobId: job.id, ownerId: activeDevUserId });
+      const { updatedJob } = await pauseJob({ jobId: job.id, ownerId: activeUserId });
       if (updatedJob) setJob(updatedJob);
+      showToast(isEnglish ? 'Job paused ✓' : 'Job pausiert ✓');
     } catch {
-      // fail silently
+      showToast(isEnglish ? 'Could not pause job.' : 'Pausieren fehlgeschlagen.', 'error');
     }
   };
 
   const confirmResume = async () => {
     if (!job) return;
     try {
-      const { updatedJob } = await resumeJob({ jobId: job.id, ownerId: activeDevUserId });
+      const { updatedJob } = await resumeJob({ jobId: job.id, ownerId: activeUserId });
       if (updatedJob) setJob(updatedJob);
+      showToast(isEnglish ? 'Job resumed ✓' : 'Job fortgesetzt ✓');
     } catch {
-      // fail silently
+      showToast(isEnglish ? 'Could not resume job.' : 'Fortsetzen fehlgeschlagen.', 'error');
     }
   };
 
@@ -490,7 +543,7 @@ export default function JobDetailScreen() {
     if (!job) return;
     setIsRepostConfirmVisible(false);
     try {
-      await repostJob({ sourceJobId: job.id, ownerId: activeDevUserId });
+      await repostJob({ sourceJobId: job.id, ownerId: activeUserId });
       handleBack();
     } catch {
       // fail silently
@@ -501,21 +554,28 @@ export default function JobDetailScreen() {
     if (!job) return;
     try {
       setIsReviewingApplication(true);
-      const result = await reviewJobApplication({
+      const { updatedJob } = await updateJobRequest({
         jobId: job.id,
         buddyId,
         decision: 'accept',
-        requesterId: activeDevUserId,
+        requesterId: activeUserId,
       });
-      if (result.updatedJob) setJob(result.updatedJob);
-      await addNotification(
-        'jobApplicationAccepted',
-        i18n.t('notifications.job_application_accepted_title'),
-        i18n.t('notifications.job_application_accepted_message'),
-        job.id,
-        undefined,
-        buddyId
-      );
+      if (updatedJob) {
+        setJob(updatedJob);
+        router.push({
+          pathname: '/chat',
+          params: {
+            jobId: updatedJob.id,
+            problem: updatedJob.problem,
+            price: updatedJob.price,
+            time: updatedJob.time,
+            timeMode: updatedJob.timeMode,
+            creatorName: updatedJob.creatorName || '',
+            currentUserRole: 'auftraggeber',
+          },
+        });
+      }
+      // DB trigger sends jobApplicationAccepted to the buddy — no local copy needed here.
     } catch {
       // fail silently
     } finally {
@@ -527,21 +587,14 @@ export default function JobDetailScreen() {
     if (!job) return;
     try {
       setIsReviewingApplication(true);
-      const result = await reviewJobApplication({
+      const { updatedJob } = await updateJobRequest({
         jobId: job.id,
         buddyId,
         decision: 'decline',
-        requesterId: activeDevUserId,
+        requesterId: activeUserId,
       });
-      if (result.updatedJob) setJob(result.updatedJob);
-      await addNotification(
-        'jobApplicationDeclined',
-        i18n.t('notifications.job_application_declined_title'),
-        i18n.t('notifications.job_application_declined_message'),
-        job.id,
-        undefined,
-        buddyId
-      );
+      if (updatedJob) setJob(updatedJob);
+      // DB trigger sends jobApplicationDeclined to the buddy — no local copy needed here.
     } catch {
       // fail silently
     } finally {
@@ -556,51 +609,35 @@ export default function JobDetailScreen() {
 
     try {
       setIsAccepting(true);
-      const jobsRaw = await AsyncStorage.getItem('jobs');
-      const parsedJobs = jobsRaw ? JSON.parse(jobsRaw) : [];
-      const safeJobs: Job[] = Array.isArray(parsedJobs) ? parsedJobs : [];
-      const completedJobs = safeJobs.filter((entry) => entry.status === 'completed');
-      const completedJobsCount = completedJobs.length;
-      const completedWithReview = completedJobs.filter(
-        (entry) => entry.review && typeof entry.review.rating === 'number'
-      );
-      const ratingCount = completedWithReview.length;
-      const averageRating =
-        ratingCount > 0
-          ? completedWithReview.reduce((sum, entry) => sum + (entry.review?.rating ?? 0), 0) / ratingCount
-          : undefined;
-
-      const reliabilityStats = await getReliabilityStats(activeDevUserId);
-      const requestResult = await requestJobApplication({
+      // All identity snapshot fields (buddyName, buddyScore, buddyRatingAverage,
+      // buddyRatingCount, buddyCompletedJobs, buddyReliability) are derived
+      // server-side by trg_sanitize_job_application_reputation. Client only sends buddy_id.
+      const { updatedJob, alreadyFinalized } = await createJobRequest({
         jobId: job.id,
         applicant: {
-          buddyId: activeDevUserId,
-          buddyName: activeDevUser.name,
-          buddyScore,
-          buddyRatingAverage: averageRating,
-          buddyRatingCount: ratingCount,
-          buddyCompletedJobs: completedJobsCount,
-          buddyReliability: getReliabilityStatus(reliabilityStats),
+          buddyId: activeUserId,
         },
       });
 
-      if (!requestResult.updatedJob) {
+      if (alreadyFinalized) {
+        setIsApplicationFinalized(true);
+        setIsAccepting(false);
+        Alert.alert(
+          isEnglish ? 'Application Closed' : 'Bewerbung nicht möglich',
+          isEnglish
+            ? 'Your application for this job has already been finalised.'
+            : 'Deine Bewerbung für diesen Auftrag wurde bereits abgeschlossen.'
+        );
+        return;
+      }
+
+      if (!updatedJob) {
         setIsAccepting(false);
         return;
       }
 
-      await addNotification(
-        'jobApplication',
-        i18n.t('notifications.job_application_received'),
-        i18n.t('notifications.job_application_received_message', {
-          buddy: requestResult.updatedJob.match?.applications?.at(-1)?.buddyName || 'Buddy',
-          score: requestResult.updatedJob.match?.applications?.at(-1)?.buddyScore ?? buddyScore,
-        }),
-        job.id,
-        undefined,
-        activeDevUserId
-      );
-      setJob(requestResult.updatedJob);
+      // DB trigger delivers jobApplication to the job owner — no local write here.
+      setJob(updatedJob);
       Alert.alert(
         i18n.t('job.request_sent_title'),
         i18n.t('job.request_sent_message')
@@ -795,36 +832,37 @@ export default function JobDetailScreen() {
             isDeclined && styles.applicantCardDeclined,
           ]}
         >
+          {isPending && !isMatchedOrActive && (
+            <Text style={styles.applicantIntentLabel}>
+              {isEnglish ? 'Buddy wants to help' : 'Buddy möchte helfen'}
+            </Text>
+          )}
+
           <View style={styles.applicantRow}>
-            <View style={styles.applicantAvatar}>
-              <Text style={styles.applicantAvatarText}>{initials}</Text>
+            <View style={[styles.applicantAvatar, isSelected && styles.applicantAvatarSelected]}>
+              <Text style={[styles.applicantAvatarText, isSelected && styles.applicantAvatarTextSelected]}>
+                {initials}
+              </Text>
             </View>
             <View style={styles.applicantInfo}>
               <Text style={styles.applicantName}>{application.buddyName}</Text>
               <View style={styles.applicantMetaRow}>
-                {typeof application.buddyRatingAverage === 'number' && (
+                {typeof application.buddyRatingAverage === 'number' ? (
                   <Text style={styles.applicantMeta}>⭐ {application.buddyRatingAverage.toFixed(1)}</Text>
+                ) : (
+                  <Text style={styles.applicantMeta}>{isEnglish ? 'New member' : 'Neues Mitglied'}</Text>
                 )}
-                {typeof application.buddyScore === 'number' && (
-                  <Text style={styles.applicantMeta}>{' '}· Score {application.buddyScore}</Text>
+                {typeof application.buddyCompletedJobs === 'number' && application.buddyCompletedJobs > 0 && (
+                  <Text style={styles.applicantMeta}>
+                    {' · '}{application.buddyCompletedJobs} {isEnglish ? 'jobs done' : 'Jobs abgeschlossen'}
+                  </Text>
                 )}
-                {application.buddyReliability && (
-                  <Text style={[
-                    styles.applicantMeta,
-                    application.buddyReliability === 'trusted' && styles.reliabilityTrusted,
-                    application.buddyReliability === 'new' && styles.reliabilityNew,
-                  ]}>
-                    {' · '}{i18n.t(`notifications.requester_review_reliability_${application.buddyReliability}`)}
+                {application.buddyReliability === 'trusted' && (
+                  <Text style={[styles.applicantMeta, styles.reliabilityTrusted]}>
+                    {' · '}{i18n.t('notifications.requester_review_reliability_trusted')}
                   </Text>
                 )}
               </View>
-              {typeof application.buddyCompletedJobs === 'number' && application.buddyCompletedJobs > 0 && (
-                <Text style={styles.applicantMetaSecondary}>
-                  {isEnglish
-                    ? `${application.buddyCompletedJobs} completed jobs`
-                    : `${application.buddyCompletedJobs} abgeschlossene Aufträge`}
-                </Text>
-              )}
             </View>
             {isSelected && (
               <View style={styles.applicantAcceptedBadge}>
@@ -832,9 +870,11 @@ export default function JobDetailScreen() {
               </View>
             )}
             {isDeclined && (
-              <Text style={styles.applicantDeclinedLabel}>
-                {isEnglish ? 'Declined' : 'Abgelehnt'}
-              </Text>
+              <View style={styles.applicantDeclinedBadge}>
+                <Text style={styles.applicantDeclinedBadgeText}>
+                  {isEnglish ? 'Declined' : 'Abgelehnt'}
+                </Text>
+              </View>
             )}
           </View>
 
@@ -860,7 +900,7 @@ export default function JobDetailScreen() {
           {isSelected && isMatchedOrActive && (
             <View style={styles.applicantAcceptedState}>
               <Text style={styles.applicantAcceptedStateText}>
-                {isEnglish ? 'Chat unlocked · Job running' : 'Chat verfügbar · Job läuft'}
+                {isEnglish ? '✓ Chat unlocked · Job in progress' : '✓ Chat verfügbar · Job läuft'}
               </Text>
             </View>
           )}
@@ -868,20 +908,29 @@ export default function JobDetailScreen() {
       );
     };
 
+    const pendingCount = applications.filter(a => a.requesterDecision === 'pending').length;
+
     return (
       <View style={styles.card}>
         <View style={styles.applicantSectionHeader}>
           <Text style={styles.sectionTitle}>
             {isEnglish ? 'Requests' : 'Anfragen'}
-            {applications.length > 0 && ` (${applications.length})`}
           </Text>
-          {isMatchedOrActive && (
+          {isMatchedOrActive ? (
             <View style={styles.applicantAcceptedBadge}>
               <Text style={styles.applicantAcceptedBadgeText}>
                 {isEnglish ? 'Accepted ✓' : 'Angenommen ✓'}
               </Text>
             </View>
-          )}
+          ) : pendingCount > 0 ? (
+            <View style={styles.applicationCountBadge}>
+              <Text style={styles.applicationCountBadgeText}>
+                {isEnglish
+                  ? `${pendingCount} request${pendingCount === 1 ? '' : 's'} received`
+                  : `${pendingCount} Anfrage${pendingCount === 1 ? '' : 'n'} erhalten`}
+              </Text>
+            </View>
+          ) : null}
         </View>
 
         {applications.length === 0 ? (
@@ -948,9 +997,15 @@ export default function JobDetailScreen() {
               {getPaymentStatusHint(getPaymentState(currentJob).paymentStatus, true)}
             </Text>
           )}
+          {getPaymentSecondaryHint(getPaymentState(currentJob).paymentStatus, true) && (
+            <Text style={styles.paymentSubHint}>
+              {getPaymentSecondaryHint(getPaymentState(currentJob).paymentStatus, true)}
+            </Text>
+          )}
         </View>
 
         {renderApplicantSection(currentJob)}
+        {renderRatingCard(currentJob, 'auftraggeber')}
         {renderMediaCard(currentJob)}
 
         {(isJobEditable(currentJob) || isJobPauseable(currentJob) || isJobResumable(currentJob) || isJobRepostable(currentJob)) && (
@@ -1200,33 +1255,177 @@ export default function JobDetailScreen() {
             {getPaymentStatusHint(getPaymentState(currentJob).paymentStatus, false)}
           </Text>
         )}
+        {getPaymentSecondaryHint(getPaymentState(currentJob).paymentStatus, false) && (
+          <Text style={styles.paymentSubHint}>
+            {getPaymentSecondaryHint(getPaymentState(currentJob).paymentStatus, false)}
+          </Text>
+        )}
       </View>
 
+      {renderRatingCard(currentJob, 'buddy')}
       {renderMediaCard(currentJob)}
 
       <Text style={styles.gamificationProgress}>{getBuddyRewardProgressText(currentJob)}</Text>
-      <Pressable
-        style={[styles.acceptButton, isAccepting && styles.acceptButtonDisabled]}
-        onPress={acceptJob}
-        disabled={isAccepting || !!localApplication || !isJobOpenForApplications(currentJob.status)}
-      >
-        <Text style={styles.acceptButtonText}>
-          {isAccepting ? i18n.t('job.accepting') : getAcceptCtaText()}
-        </Text>
-      </Pressable>
-      <Text style={styles.acceptHelperText}>{getAcceptHelperText()}</Text>
+
+      {isAssignedBuddy && isChatAccessibleForJob(currentJob) ? (
+        <>
+          <Pressable
+            style={styles.buddyChatButton}
+            onPress={() => router.push({
+              pathname: '/chat',
+              params: {
+                jobId: currentJob.id,
+                problem: currentJob.problem ?? '',
+                price: currentJob.price ?? '',
+                time: currentJob.time ?? '',
+                timeMode: currentJob.timeMode ?? 'sofort',
+                creatorName: currentJob.creatorName ?? '',
+                currentUserRole: 'buddy',
+              },
+            })}
+          >
+            <Text style={styles.buddyChatButtonText}>
+              {isEnglish ? 'Open Chat' : 'Chat öffnen'}
+            </Text>
+          </Pressable>
+          <Text style={[styles.acceptHelperText, styles.acceptHelperTextAccepted]}>
+            {getAcceptHelperText()}
+          </Text>
+        </>
+      ) : (
+        <>
+          <Pressable
+            style={[
+              styles.acceptButton,
+              (isAccepting || !isJobOpenForApplications(currentJob.status)) && styles.acceptButtonDisabled,
+              localApplication?.requesterDecision === 'pending' && styles.acceptButtonPending,
+              localApplication?.requesterDecision === 'accepted' && styles.acceptButtonAccepted,
+              localApplication?.requesterDecision === 'declined' && styles.acceptButtonDeclined,
+            ]}
+            onPress={acceptJob}
+            disabled={isAccepting || !!localApplication || isApplicationFinalized || !isJobOpenForApplications(currentJob.status)}
+          >
+            <Text style={[
+              styles.acceptButtonText,
+              localApplication?.requesterDecision === 'pending' && styles.acceptButtonTextMuted,
+              localApplication?.requesterDecision === 'declined' && styles.acceptButtonTextMuted,
+            ]}>
+              {isAccepting ? i18n.t('job.accepting') : getAcceptCtaText()}
+            </Text>
+          </Pressable>
+          <Text style={[
+            styles.acceptHelperText,
+            localApplication?.requesterDecision === 'pending' && styles.acceptHelperTextPending,
+            localApplication?.requesterDecision === 'accepted' && styles.acceptHelperTextAccepted,
+          ]}>
+            {getAcceptHelperText()}
+          </Text>
+        </>
+      )}
     </ScrollView>
   );
 
+  // ─── Inline rating card ───────────────────────────────────────────────────
+
+  const submitRating = async (raterRole: 'auftraggeber' | 'buddy') => {
+    if (!job || ratingValue === 0 || isSubmittingRating) return;
+    setIsSubmittingRating(true);
+    try {
+      const { updatedJob } = await submitJobRating({
+        jobId: job.id,
+        raterRole,
+        rating: ratingValue as 1 | 2 | 3 | 4 | 5,
+        reviewText: ratingText,
+      });
+      setJob(updatedJob);
+      setRatingSuccess(true);
+    } catch {
+      showToast(isEnglish ? 'Could not save rating.' : 'Bewertung konnte nicht gespeichert werden.', 'error');
+    } finally {
+      setIsSubmittingRating(false);
+    }
+  };
+
+  const renderRatingCard = (currentJob: Job, raterRole: 'auftraggeber' | 'buddy') => {
+    if (currentJob.status !== 'completed') return null;
+
+    const existingReviews = getNormalizedJobReviews(currentJob);
+    const alreadyRated = existingReviews.some((r) => r.reviewerRole === raterRole);
+    const displayRating = raterRole === 'auftraggeber'
+      ? currentJob.ownerRatingForBuddy
+      : currentJob.buddyRatingForOwner;
+
+    const title = raterRole === 'auftraggeber'
+      ? (isEnglish ? 'Rate your Buddy' : 'Bewerte deinen Buddy')
+      : (isEnglish ? 'Rate the requester' : 'Bewerte den Auftraggeber');
+
+    if (alreadyRated || ratingSuccess) {
+      return (
+        <View style={styles.ratingCard}>
+          <Text style={styles.ratingCardTitle}>
+            {isEnglish ? 'Thank you for your rating' : 'Danke für deine Bewertung'}
+          </Text>
+          {(displayRating ?? ratingValue) > 0 && (
+            <Text style={styles.ratingCardStarsDone}>
+              {'★'.repeat(displayRating ?? ratingValue)}{'☆'.repeat(5 - (displayRating ?? ratingValue))}
+            </Text>
+          )}
+        </View>
+      );
+    }
+
+    return (
+      <View style={styles.ratingCard}>
+        <Text style={styles.ratingCardTitle}>{title}</Text>
+        <View style={styles.ratingStarRow}>
+          {([1, 2, 3, 4, 5] as const).map((v) => (
+            <Pressable key={v} onPress={() => setRatingValue(v)} style={styles.ratingStarBtn} hitSlop={6}>
+              <Text style={styles.ratingStarText}>{ratingValue >= v ? '★' : '☆'}</Text>
+            </Pressable>
+          ))}
+        </View>
+        <TextInput
+          style={styles.ratingTextInput}
+          placeholder={isEnglish ? 'Optional comment...' : 'Optionaler Kommentar...'}
+          placeholderTextColor={colors.placeholder}
+          value={ratingText}
+          onChangeText={setRatingText}
+          multiline
+        />
+        <Pressable
+          style={[styles.ratingSubmitBtn, (ratingValue === 0 || isSubmittingRating) && styles.ratingSubmitBtnDisabled]}
+          onPress={() => submitRating(raterRole)}
+          disabled={ratingValue === 0 || isSubmittingRating}
+        >
+          <Text style={styles.ratingSubmitBtnText}>
+            {isEnglish ? 'Submit rating' : 'Bewertung senden'}
+          </Text>
+        </Pressable>
+      </View>
+    );
+  };
+
   // ─── Main render dispatch ─────────────────────────────────────────────────
 
-  const isOwnerView = job.requesterId === activeDevUserId;
+  const isOwnerView = job.requesterId === activeUserId;
 
   return (
-    <>
+    <View style={styles.screen}>
       <Stack.Screen options={{ headerShown: false }} />
       {isOwnerView ? renderOwnerDetail(job) : renderMarketplaceDetail(job)}
-    </>
+      {toast && (
+        <View
+          style={[
+            styles.toast,
+            toast.variant === 'error' && styles.toastError,
+            { bottom: insets.bottom + spacing.xxl },
+          ]}
+          pointerEvents="none"
+        >
+          <Text style={styles.toastText}>{toast.message}</Text>
+        </View>
+      )}
+    </View>
   );
 }
 
@@ -1452,6 +1651,11 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
     marginTop: spacing.sm,
   },
+  paymentSubHint: {
+    ...typography.meta,
+    color: colors.placeholder,
+    marginTop: 2,
+  },
   card: {
     backgroundColor: colors.card,
     borderRadius: layout.borderRadiusMedium,
@@ -1504,15 +1708,44 @@ const styles = StyleSheet.create({
     backgroundColor: colors.lightGrey,
     shadowOpacity: 0.04,
   },
+  acceptButtonPending: {
+    backgroundColor: colors.veryLightGrey,
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
+    shadowOpacity: 0,
+  },
+  acceptButtonAccepted: {
+    backgroundColor: colors.lightGreen,
+    borderWidth: 1,
+    borderColor: '#C6F0CC',
+    shadowOpacity: 0,
+  },
+  acceptButtonDeclined: {
+    backgroundColor: colors.lightGrey,
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
+    shadowOpacity: 0,
+  },
   acceptButtonText: {
     color: colors.card,
     ...typography.button,
+  },
+  acceptButtonTextMuted: {
+    color: colors.textSecondary,
   },
   acceptHelperText: {
     ...typography.meta,
     color: colors.textSecondary,
     textAlign: 'center',
     marginBottom: spacing.lg,
+  },
+  acceptHelperTextPending: {
+    color: colors.secondary,
+    fontWeight: '600',
+  },
+  acceptHelperTextAccepted: {
+    color: colors.green,
+    fontWeight: '600',
   },
   rewardLine: {
     ...typography.meta,
@@ -1785,9 +2018,9 @@ const styles = StyleSheet.create({
     borderRadius: 999,
     paddingVertical: 6,
     paddingHorizontal: spacing.md,
-    backgroundColor: colors.secondary,
+    backgroundColor: colors.primary,
     borderWidth: 1,
-    borderColor: colors.secondary,
+    borderColor: colors.primary,
   },
   acceptApplicationButtonText: {
     fontSize: 13,
@@ -1815,7 +2048,9 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.lightBorder,
   },
   applicantCardSelected: {
-    // no extra visual needed — the ✓ badge and accepted state handle it
+    borderLeftWidth: 3,
+    borderLeftColor: colors.green,
+    paddingLeft: spacing.sm,
   },
   applicantCardDeclined: {
     opacity: 0.45,
@@ -1824,6 +2059,47 @@ const styles = StyleSheet.create({
     ...typography.meta,
     color: colors.placeholder,
     marginLeft: spacing.xs,
+  },
+  applicantIntentLabel: {
+    ...typography.meta,
+    color: colors.secondary,
+    fontWeight: '600',
+    marginBottom: spacing.sm,
+  },
+  applicantAvatarSelected: {
+    backgroundColor: colors.lightGreen,
+    borderColor: '#C6F0CC',
+  },
+  applicantAvatarTextSelected: {
+    color: colors.green,
+  },
+  applicantDeclinedBadge: {
+    borderRadius: 999,
+    paddingVertical: 2,
+    paddingHorizontal: spacing.sm,
+    backgroundColor: colors.lightGrey,
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
+  },
+  applicantDeclinedBadgeText: {
+    fontSize: 10,
+    fontWeight: '500' as const,
+    lineHeight: 14,
+    color: colors.placeholder,
+  },
+  applicationCountBadge: {
+    borderRadius: 999,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    backgroundColor: colors.veryLightPurple,
+    borderWidth: 1,
+    borderColor: colors.overlayLightPurple,
+  },
+  applicationCountBadgeText: {
+    fontSize: 11,
+    fontWeight: '600' as const,
+    lineHeight: 15,
+    color: colors.secondary,
   },
   issueBanner: {
     backgroundColor: colors.lightOrange,
@@ -1881,6 +2157,99 @@ const styles = StyleSheet.create({
     color: colors.secondary,
   },
   ownerMgmtBtnTextPrimary: {
+    color: colors.card,
+  },
+  toast: {
+    position: 'absolute',
+    left: layout.screenPaddingX,
+    right: layout.screenPaddingX,
+    backgroundColor: colors.green,
+    borderRadius: layout.borderRadiusSmall,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 6,
+  },
+  toastError: {
+    backgroundColor: colors.red,
+  },
+  toastText: {
+    ...typography.metaStrong,
+    color: colors.card,
+    textAlign: 'center',
+  },
+  ratingCard: {
+    backgroundColor: colors.card,
+    borderRadius: layout.borderRadiusMedium,
+    padding: layout.cardPadding,
+    marginBottom: spacing.lg,
+    shadowColor: '#000',
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
+  },
+  ratingCardTitle: {
+    ...typography.metaStrong,
+    color: colors.textPrimary,
+    marginBottom: spacing.lg,
+  },
+  ratingStarRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    marginBottom: spacing.xl,
+  },
+  ratingStarBtn: {
+    flex: 1,
+    alignItems: 'center',
+  },
+  ratingStarText: {
+    fontSize: 34,
+    color: colors.yellow,
+  },
+  ratingCardStarsDone: {
+    fontSize: 28,
+    color: colors.yellow,
+    marginTop: spacing.sm,
+  },
+  ratingTextInput: {
+    minHeight: 80,
+    backgroundColor: colors.veryLightPurple,
+    borderRadius: layout.borderRadiusMedium,
+    padding: spacing.md,
+    ...typography.body,
+    color: colors.textPrimary,
+    marginBottom: spacing.lg,
+    textAlignVertical: 'top',
+  },
+  ratingSubmitBtn: {
+    backgroundColor: colors.primary,
+    borderRadius: layout.borderRadiusMedium,
+    paddingVertical: spacing.lg,
+    alignItems: 'center',
+  },
+  ratingSubmitBtnDisabled: {
+    opacity: 0.5,
+  },
+  ratingSubmitBtnText: {
+    ...typography.buttonSecondary,
+    color: colors.card,
+  },
+  buddyChatButton: {
+    backgroundColor: colors.secondary,
+    borderRadius: layout.borderRadiusMedium,
+    paddingVertical: spacing.lg,
+    alignItems: 'center' as const,
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  buddyChatButtonText: {
+    ...typography.button,
     color: colors.card,
   },
 });

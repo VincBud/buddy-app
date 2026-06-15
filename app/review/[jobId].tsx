@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
@@ -13,9 +12,11 @@ import {
 } from 'react-native';
 import { colors } from '../../lib/colors';
 import i18n, { useLanguage } from '../../lib/i18n';
-import { Job, JobParticipantRole } from '../../lib/jobs';
+import { getMatchedBuddyName, Job, JobParticipantRole } from '../../lib/jobs';
 import { goBackOrReplace } from '../../lib/navigation';
-import { createNotification, Notification } from '../../lib/notifications';
+import { ensureJobPaymentState, formatPriceLine } from '../../lib/payments';
+import { addNotification } from '../../services/notifications.service';
+import { loadJobs, saveJobs } from '../../services/jobs.service';
 import {
     addPreferredBuddyFromJob,
     getBuddyIdFromName,
@@ -34,8 +35,8 @@ import { typography } from '../../lib/typography';
 export default function ReviewJobScreen() {
   useLanguage();
   const router = useRouter();
-  const params = useLocalSearchParams<{ jobId: string; currentUserRole?: string | string[] }>();
-  const jobId = params.jobId;
+  const params = useLocalSearchParams<{ jobId: string | string[]; currentUserRole?: string | string[] }>();
+  const jobId = Array.isArray(params.jobId) ? params.jobId[0] : params.jobId;
   const [job, setJob] = useState<Job | null>(null);
   const [rating, setRating] = useState<0 | 1 | 2 | 3 | 4 | 5>(0);
   const [reviewText, setReviewText] = useState('');
@@ -55,21 +56,25 @@ export default function ReviewJobScreen() {
 
   useEffect(() => {
     const loadJob = async () => {
-      if (!jobId) return;
+      if (!jobId) {
+        setJob(null);
+        return;
+      }
 
       try {
-        const jobsRaw = await AsyncStorage.getItem('jobs');
-        const parsedJobs = jobsRaw ? JSON.parse(jobsRaw) : [];
-        const safeJobs: Job[] = Array.isArray(parsedJobs) ? parsedJobs : [];
+        const safeJobs = await loadJobs();
         const foundJob = safeJobs.find((item) => item.id === jobId) || null;
         setJob(foundJob);
 
-        if (foundJob?.creatorName && reviewerRole === 'auftraggeber') {
-          const preferredBuddies = await loadPreferredBuddies();
-          const buddyId = getBuddyIdFromName(foundJob.creatorName);
-          setIsPreferredBuddy(
-            preferredBuddies.some((buddy) => buddy.id === buddyId)
-          );
+        if (reviewerRole === 'auftraggeber') {
+          const matchedBuddyName = foundJob ? getMatchedBuddyName(foundJob) : null;
+          if (matchedBuddyName) {
+            const preferredBuddies = await loadPreferredBuddies();
+            const buddyId = getBuddyIdFromName(matchedBuddyName);
+            setIsPreferredBuddy(
+              preferredBuddies.some((buddy) => buddy.id === buddyId)
+            );
+          }
         } else {
           setIsPreferredBuddy(false);
         }
@@ -87,9 +92,7 @@ export default function ReviewJobScreen() {
     setErrorMessage('');
 
     try {
-      const jobsRaw = await AsyncStorage.getItem('jobs');
-      const parsedJobs = jobsRaw ? JSON.parse(jobsRaw) : [];
-      const safeJobs: Job[] = Array.isArray(parsedJobs) ? parsedJobs : [];
+      const safeJobs = await loadJobs();
 
       const updatedJobs = safeJobs.map((item) =>
         item.id !== job.id
@@ -153,23 +156,13 @@ export default function ReviewJobScreen() {
         return;
       }
 
-      await AsyncStorage.setItem('jobs', JSON.stringify(updatedJobs));
+      await saveJobs(updatedJobs);
 
-      // Create and persist notification
-      const notification = createNotification(
+      await addNotification(
         'review',
         i18n.t('notifications.review'),
         `${i18n.t('notifications.review')}: ${job.problem}`,
         job.id
-      );
-      const notificationsRaw = await AsyncStorage.getItem('notifications');
-      const existingNotifications: Notification[] = notificationsRaw
-        ? JSON.parse(notificationsRaw)
-        : [];
-      const updatedNotifications = [notification, ...existingNotifications];
-      await AsyncStorage.setItem(
-        'notifications',
-        JSON.stringify(updatedNotifications)
       );
 
       setSuccess(true);
@@ -201,7 +194,10 @@ export default function ReviewJobScreen() {
     }
   };
 
-  const creatorName = job?.creatorName || i18n.t('common.default_user_name');
+  const creatorName =
+    reviewerRole === 'auftraggeber'
+      ? (job ? getMatchedBuddyName(job) : null) ?? i18n.t('common.default_user_name')
+      : job?.creatorName || i18n.t('common.default_user_name');
   const reviewEligibility = job
     ? getReviewEligibility(job, reviewerRole)
     : {
@@ -212,6 +208,9 @@ export default function ReviewJobScreen() {
   const counterpartReviewed = job
     ? getNormalizedJobReviews(job).some((entry) => entry.reviewerRole === revieweeRole)
     : false;
+
+  const payment = job ? ensureJobPaymentState(job) : null;
+  const buddyPayout = payment?.buddyEarnings ?? 0;
 
   const handleBack = () => {
     goBackOrReplace(router, '/(tabs)/feed');
@@ -240,6 +239,40 @@ export default function ReviewJobScreen() {
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
+        {reviewerRole === 'buddy' && (
+          <View style={styles.payoutCard}>
+            <Text style={styles.payoutCardTitle}>{i18n.t('profile.review_payout_title')}</Text>
+            <Text style={styles.payoutCardSubtitle}>{i18n.t('profile.review_payout_subtitle')}</Text>
+            {buddyPayout > 0 && (
+              <View style={styles.payoutAmountRow}>
+                <Text style={styles.payoutAmountLabel}>{i18n.t('profile.review_payout_label')}</Text>
+                <Text style={styles.payoutAmountValue}>{formatPriceLine(buddyPayout)}</Text>
+              </View>
+            )}
+          </View>
+        )}
+
+        {reviewerRole === 'auftraggeber' && (
+          <View style={styles.completionCard}>
+            <Text style={styles.completionCardTitle}>{i18n.t('profile.review_completion_title')}</Text>
+            <Text style={styles.completionCardSubtitle}>{i18n.t('profile.review_completion_subtitle')}</Text>
+            <Pressable
+              style={styles.newJobButton}
+              onPress={() => router.push('/(tabs)/create')}
+            >
+              <Text style={styles.newJobButtonText}>{i18n.t('profile.review_new_job_cta')}</Text>
+            </Pressable>
+          </View>
+        )}
+
+        {!jobId ? (
+          <View style={styles.card}>
+            <View style={styles.blockedCard}>
+              <Text style={styles.blockedTitle}>{i18n.t('common.job_not_found_title')}</Text>
+              <Text style={styles.blockedText}>{i18n.t('common.job_not_found_text')}</Text>
+            </View>
+          </View>
+        ) : (
         <View style={styles.card}>
           <Text style={styles.title}>{i18n.t('profile.review_title')}</Text>
           <Text style={styles.subtitle}>{i18n.t('profile.review_prompt')}</Text>
@@ -354,6 +387,7 @@ export default function ReviewJobScreen() {
             </>
           )}
         </View>
+        )}
       </ScrollView>
     </KeyboardAvoidingView>
   );
@@ -511,5 +545,69 @@ const styles = StyleSheet.create({
     ...typography.meta,
     color: colors.red,
     marginBottom: spacing.md,
+  },
+  payoutCard: {
+    backgroundColor: colors.lightGreen,
+    borderRadius: layout.borderRadiusMedium,
+    borderWidth: 1,
+    borderColor: '#C6F0CC',
+    padding: layout.cardPadding,
+    marginBottom: spacing.md,
+    gap: spacing.xs,
+  },
+  payoutCardTitle: {
+    ...typography.sectionTitle,
+    color: colors.green,
+  },
+  payoutCardSubtitle: {
+    ...typography.body,
+    color: colors.green,
+    lineHeight: 22,
+  },
+  payoutAmountRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderTopColor: '#C6F0CC',
+  },
+  payoutAmountLabel: {
+    ...typography.metaStrong,
+    color: colors.green,
+  },
+  payoutAmountValue: {
+    ...typography.sectionTitle,
+    color: colors.green,
+  },
+  completionCard: {
+    backgroundColor: colors.veryLightPurple,
+    borderRadius: layout.borderRadiusMedium,
+    borderWidth: 1,
+    borderColor: colors.overlayLightPurple,
+    padding: layout.cardPadding,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  completionCardTitle: {
+    ...typography.sectionTitle,
+    color: colors.secondary,
+  },
+  completionCardSubtitle: {
+    ...typography.body,
+    color: colors.textSecondary,
+    lineHeight: 22,
+  },
+  newJobButton: {
+    marginTop: spacing.xs,
+    backgroundColor: colors.secondary,
+    borderRadius: layout.borderRadiusSmall,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+  },
+  newJobButtonText: {
+    ...typography.buttonSecondary,
+    color: colors.card,
   },
 });

@@ -1,9 +1,12 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+    ActivityIndicator,
+    Animated,
     Image,
+    Modal,
     Pressable,
     ScrollView,
     StyleSheet,
@@ -14,9 +17,13 @@ import {
 import DateTimePickerModal from 'react-native-modal-datetime-picker';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../lib/colors';
+import { debugLog } from '../../lib/config/debug';
 import i18n, { useLanguage } from '../../lib/i18n';
-import { getActiveDevUser, getActiveDevUserId } from '../../lib/dev-session';
-import { computeExpiresAt, Job, JOB_CATEGORIES, JobCategory, JobRebooking } from '../../lib/jobs';
+import { getActiveUserId } from '../../lib/auth';
+import { useCurrentUser } from '../../lib/current-user';
+import { CATEGORY_META, computeExpiresAt, Job, JOB_CATEGORIES, JobCategory, JobRebooking, TimeMode } from '../../lib/jobs';
+import { upsertJob } from '../../services/jobs.service';
+import { uploadMedia } from '../../services/media.service';
 import { addNotification } from '../../services/notifications.service';
 import { createInitialPaymentState } from '../../lib/payments';
 import { loadPreferredBuddies, PreferredBuddy } from '../../lib/preferred-buddies';
@@ -24,6 +31,7 @@ import { incrementReliabilityStats } from '../../services/user.service';
 import {
     calculatePriceBreakdown,
     formatPriceAmount,
+    MAX_JOB_BASE_PRICE,
     MIN_JOB_BASE_PRICE,
     toStoredPriceValue,
     validateJobBasePrice,
@@ -31,11 +39,10 @@ import {
 import { layout, spacing } from '../../lib/spacing';
 import { typography } from '../../lib/typography';
 
-type TimeMode = 'sofort' | 'flexibel' | 'termin' | null;
-
 export default function CreateScreen() {
   useLanguage();
   const insets = useSafeAreaInsets();
+  const { user: currentUser } = useCurrentUser();
   const params = useLocalSearchParams<{
     rebookBuddyId?: string;
     rebookBuddyName?: string;
@@ -65,7 +72,7 @@ export default function CreateScreen() {
   const [categoryManuallySelected, setCategoryManuallySelected] = useState(false);
   const [selectedPrice, setSelectedPrice] = useState<string | null>(null);
   const [customPrice, setCustomPrice] = useState('');
-  const [selectedTime, setSelectedTime] = useState<TimeMode>(null);
+  const [selectedTime, setSelectedTime] = useState<TimeMode | null>(null);
 
   const [flexibleRange, setFlexibleRange] = useState('');
   const [media, setMedia] = useState<string[]>([]);
@@ -76,97 +83,86 @@ export default function CreateScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [showTimePicker, setShowTimePicker] = useState(false);
   const [notifyPreferredBuddies, setNotifyPreferredBuddies] = useState(false);
+  const [showBuddyModal, setShowBuddyModal] = useState(false);
   const [preferredBuddies, setPreferredBuddies] = useState<PreferredBuddy[]>([]);
+  const [showCategorySheet, setShowCategorySheet] = useState(false);
+  const [categorySearch, setCategorySearch] = useState('');
+  const suggestFade = useRef(new Animated.Value(0)).current;
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
+  const errorToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (errorToast) {
+      if (errorToastTimer.current) clearTimeout(errorToastTimer.current);
+      errorToastTimer.current = setTimeout(() => setErrorToast(null), 2500);
+    }
+    return () => {
+      if (errorToastTimer.current) clearTimeout(errorToastTimer.current);
+    };
+  }, [errorToast]);
 
   const isCustomPrice = selectedPrice === 'custom';
 
   const CATEGORY_KEYWORDS: Record<JobCategory, string[]> = {
-    transport: [
-      'fahren',
-      'abholen',
-      'liefern',
-      'umzug',
-      'drive',
-      'pickup',
-      'deliver',
-      'moving',
-      'move',
-    ],
-    handyman: [
-      'kaputt',
-      'reparieren',
-      'auto',
-      'schrauben',
-      'broken',
-      'repair',
-      'car',
-      'screw',
-      'fix',
-    ],
-    household: [
-      'putzen',
-      'waschen',
-      'reinigen',
-      'clean',
-      'wash',
-      'laundry',
-    ],
-    tech: [
-      'laptop',
-      'handy',
-      'wlan',
-      'pc',
-      'wifi',
-      'computer',
-      'phone',
-    ],
-    errands: [
-      'einkaufen',
-      'besorgen',
-      'apotheke',
-      'shopping',
-      'shop',
-      'buy',
-      'errand',
-      'pharmacy',
-    ],
+    transport: ['transport', 'fahrt', 'fahrdienst', 'taxi', 'auto', 'fahrer', 'mitfahrt', 'chauffeur', 'fahren', 'drive', 'pickup'],
+    moving: ['möbel tragen', 'tragen', 'schleppen', 'sofa', 'schrank', 'schwer', 'last', 'heben'],
+    relocation: ['umzug', 'umziehen', 'einzug', 'auszug', 'karton', 'kiste', 'umzugshilfe'],
+    errands: ['einkauf', 'besorgung', 'supermarkt', 'apotheke', 'paket', 'post', 'bank', 'errand', 'einkaufen', 'besorgen', 'shop', 'buy', 'pharmacy'],
+    tech: ['tech', 'computer', 'pc', 'laptop', 'software', 'router', 'internet', 'wifi', 'handy', 'setup', 'wlan', 'phone'],
+    household: ['haushalt', 'putzen', 'reinigung', 'wäsche', 'küche', 'wohnung', 'sauber', 'clean', 'waschen', 'reinigen', 'wash', 'laundry'],
+    garden: ['garten', 'rasen', 'hecke', 'mähen', 'pflanzen', 'schneiden', 'terrasse', 'balkon', 'außen'],
+    furniture: ['möbel aufbauen', 'aufbauen', 'ikea', 'regal', 'bett aufbauen', 'schrank aufbauen', 'aufbau'],
+    petcare: ['hund', 'katze', 'tier', 'haustier', 'gassi', 'füttern', 'tierpflege', 'pet'],
+    events: ['event', 'gastronomie', 'gastro', 'feier', 'party', 'veranstaltung', 'kellner', 'catering', 'service'],
+    photo: ['foto', 'photo', 'social media', 'instagram', 'content', 'video', 'shooting', 'kamera', 'reels'],
+    handyman: ['handyman', 'reparatur', 'repair', 'bohren', 'montieren', 'bauen', 'werkzeug', 'install', 'schrauben', 'kaputt', 'reparieren', 'broken', 'fix'],
+    storage: ['lager', 'lagern', 'stapeln', 'keller', 'dachboden', 'einlagern', 'sortieren'],
+    delivery: ['lieferung', 'liefern', 'abholen', 'abholung', 'kurierfahrt', 'auslieferung', 'bringen'],
+    other: ['sonstige', 'andere', 'sonstiges', 'anderes', 'verschiedenes'],
   };
 
-  const detectSuggestedCategory = (text: string): JobCategory | null => {
+  const detectTopCategories = (text: string): JobCategory[] => {
     const normalized = text.toLowerCase();
-    if (!normalized.trim()) return null;
+    if (!normalized.trim()) return [];
 
-    let bestCategory: JobCategory | null = null;
-    let bestScore = 0;
+    const scores: { category: JobCategory; score: number }[] = [];
 
     for (const category of JOB_CATEGORIES) {
       const keywords = CATEGORY_KEYWORDS[category];
       let score = 0;
-
       for (const keyword of keywords) {
         if (normalized.includes(keyword)) score += 1;
       }
-
-      if (score > bestScore) {
-        bestScore = score;
-        bestCategory = category;
-      }
+      if (score > 0) scores.push({ category, score });
     }
 
-    return bestScore > 0 ? bestCategory : null;
+    return scores
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 3)
+      .map((s) => s.category);
   };
 
-  const suggestedCategory = useMemo(
-    () => detectSuggestedCategory(problem),
+  const topSuggestions = useMemo(
+    () => detectTopCategories(problem),
     [problem]
   );
 
   useEffect(() => {
     if (categoryManuallySelected) return;
-    if (!suggestedCategory) return;
-    if (selectedCategory === suggestedCategory) return;
-    setSelectedCategory(suggestedCategory);
-  }, [categoryManuallySelected, selectedCategory, suggestedCategory]);
+    const top = topSuggestions[0] ?? null;
+    if (!top) return;
+    if (selectedCategory === top) return;
+    setSelectedCategory(top);
+  }, [categoryManuallySelected, selectedCategory, topSuggestions]);
+
+  useEffect(() => {
+    Animated.timing(suggestFade, {
+      toValue: topSuggestions.length > 0 ? 1 : 0,
+      duration: 200,
+      useNativeDriver: true,
+    }).start();
+  }, [topSuggestions.length, suggestFade]);
 
   useEffect(() => {
     const loadBuddies = async () => {
@@ -189,6 +185,7 @@ export default function CreateScreen() {
         parsedPrice: null,
         isValid: false,
         isBelowMinimum: false,
+        isAboveMaximum: false,
       };
     }
 
@@ -205,13 +202,26 @@ export default function CreateScreen() {
   const showCustomPriceValidationError =
     isCustomPrice &&
     customPrice.trim().length > 0 &&
-    (!priceValidation.isValid || priceValidation.isBelowMinimum);
+    !priceValidation.isValid;
 
   const customPriceValidationKey = priceValidation.isBelowMinimum
     ? 'create.custom_price_min_error'
-    : 'create.invalid_price';
+    : priceValidation.isAboveMaximum
+      ? 'create.custom_price_max_error'
+      : 'create.invalid_price';
 
-  const isSubmitBlockedByPrice = isCustomPrice && !priceValidation.isValid;
+  const customPriceValidationAmount = priceValidation.isAboveMaximum
+    ? MAX_JOB_BASE_PRICE
+    : MIN_JOB_BASE_PRICE;
+
+  const isFormValid =
+    problem.trim().length > 0 &&
+    selectedCategory !== null &&
+    selectedPrice !== null &&
+    (!isCustomPrice || priceValidation.isValid) &&
+    selectedTime !== null &&
+    (selectedTime !== 'flexibel' || flexibleRange.trim().length > 0) &&
+    (selectedTime !== 'termin' || (appointmentDate !== null && appointmentTime !== null));
 
   const priceHelperKey = useMemo(() => {
     if (priceValue === null) return 'create.price_helper_default';
@@ -236,7 +246,7 @@ export default function CreateScreen() {
 
   const pickMedia = async () => {
     if (media.length >= 3) {
-      alert(i18n.t('create.max_3_media'));
+      setErrorToast(i18n.t('create.max_3_media'));
       return;
     }
 
@@ -244,7 +254,7 @@ export default function CreateScreen() {
       await ImagePicker.requestMediaLibraryPermissionsAsync();
 
     if (!permissionResult.granted) {
-      alert(i18n.t('create.allow_media'));
+      setErrorToast(i18n.t('create.allow_media'));
       return;
     }
 
@@ -300,37 +310,43 @@ export default function CreateScreen() {
   };
 
   const handleSubmit = async () => {
-    if (!problem || !selectedCategory || (!selectedPrice && !customPrice) || !selectedTime) {
-      alert(i18n.t('create.fill_all'));
-      return;
-    }
+    if (isSubmitting || !isFormValid) return;
 
-    if (selectedPrice === 'custom' && !customPrice.trim()) {
-      alert(i18n.t('create.fill_all'));
-      return;
-    }
+    if (!priceBreakdown || priceValue === null) return;
 
-    if (priceValidation.isBelowMinimum) {
-      alert(i18n.t('create.custom_price_min_error', { amount: MIN_JOB_BASE_PRICE }));
-      return;
-    }
-
-    if (!priceValidation.isValid || priceValue === null || !priceBreakdown) {
-      alert(i18n.t('create.invalid_price'));
-      return;
-    }
-
-    if (selectedTime === 'flexibel' && !flexibleRange.trim()) {
-      alert(i18n.t('create.enter_flexible'));
-      return;
-    }
-
-    if (selectedTime === 'termin' && (!appointmentDate || !appointmentTime)) {
-      alert(i18n.t('create.pick_date_time'));
-      return;
-    }
+    setIsSubmitting(true);
+    const tSubmit = Date.now();
 
     const finalPrice = toStoredPriceValue(priceBreakdown.basePrice);
+    const tempJobId = Date.now().toString();
+    const userId = getActiveUserId();
+
+    // Upload all local URIs in parallel. With Promise.all the total time is
+    // bounded by the slowest single upload, not the sum of all uploads.
+    // Pre-existing http(s) URLs (e.g. an already-uploaded image being re-saved)
+    // pass through untouched and keep their position in the array.
+    const tMedia = Date.now();
+    const settled = await Promise.allSettled(
+      media.map((uri) =>
+        uri.startsWith('http')
+          ? Promise.resolve({ publicUrl: uri })
+          : uploadMedia(uri, tempJobId, userId)
+      )
+    );
+    const remoteMedia: string[] = [];
+    let anyUploadFailed = false;
+    settled.forEach((r, i) => {
+      if (r.status === 'fulfilled') {
+        remoteMedia.push(r.value.publicUrl);
+      } else {
+        console.warn(`[create] media upload failed idx=${i}:`, r.reason);
+        anyUploadFailed = true;
+      }
+    });
+    debugLog(`[create] handleSubmit: media uploads done count=${remoteMedia.length}/${media.length} (${Date.now() - tMedia}ms)`);
+    if (anyUploadFailed) {
+      setErrorToast(i18n.t('create.media_upload_failed'));
+    }
 
     const rebookingMeta: JobRebooking | undefined = rebookBuddy
       ? {
@@ -343,9 +359,9 @@ export default function CreateScreen() {
       : undefined;
 
     const newJob: Job = {
-      id: Date.now().toString(),
-      requesterId: getActiveDevUserId(),
-      creatorName: getActiveDevUser().name,
+      id: tempJobId,
+      requesterId: userId,
+      creatorName: currentUser?.displayName || '',
       category: selectedCategory,
       problem,
       price: finalPrice,
@@ -354,36 +370,37 @@ export default function CreateScreen() {
       totalPrice: priceBreakdown.totalPrice,
       payment: createInitialPaymentState(priceBreakdown),
       time: buildTimeLabel(),
-      timeMode: selectedTime,
+      timeMode: selectedTime ?? undefined,
       flexibleRange,
       appointmentDate: formattedDate,
       appointmentTime: formattedTime,
-      media,
+      media: remoteMedia,
       location: {
         lat: 47.856,
         lng: 12.128,
       },
       status: 'open',
-      expiresAt: computeExpiresAt(selectedTime, formattedDate, formattedTime),
+      expiresAt: computeExpiresAt(selectedTime ?? undefined, formattedDate, formattedTime),
       rebooking: rebookingMeta,
     };
 
+    // TODO(rate-limit): enforce per-user job creation rate limit (e.g. 5 active jobs or 10/day) before upsertJob.
     try {
-      const existingJobsRaw = await AsyncStorage.getItem('jobs');
-      const existingJobs = existingJobsRaw ? JSON.parse(existingJobsRaw) : [];
-      const safeJobs = Array.isArray(existingJobs) ? existingJobs : [];
+      const tUpsert = Date.now();
+      await upsertJob(newJob);
+      debugLog(`[create] handleSubmit: upsertJob done (${Date.now() - tUpsert}ms)`);
 
-      const updatedJobs = [newJob, ...safeJobs];
-      await AsyncStorage.setItem('jobs', JSON.stringify(updatedJobs));
-      await incrementReliabilityStats(getActiveDevUserId(), 'totalPostedJobs');
-
+      // Non-critical follow-ups run in the background so we can navigate immediately.
+      void incrementReliabilityStats(getActiveUserId(), 'totalPostedJobs').catch((e) =>
+        console.warn('[create] incrementReliabilityStats failed:', e)
+      );
       if (notifyPreferredBuddies && preferredBuddies.length > 0) {
-        await addNotification(
+        void addNotification(
           'preferredBuddyJob',
           i18n.t('notifications.preferredBuddyJob'),
           i18n.t('notifications.preferred_buddy_rebooking'),
           newJob.id
-        );
+        ).catch((e) => console.warn('[create] addNotification failed:', e));
       }
 
       setProblem('');
@@ -399,10 +416,13 @@ export default function CreateScreen() {
       setNotifyPreferredBuddies(false);
       setRebookBuddy(null);
 
+      console.log(`[create] posted job=${newJob.id} in ${Date.now() - tSubmit}ms`);
       router.push('/(tabs)/feed');
     } catch (error) {
       console.error(error);
-      alert(i18n.t('create.create_error'));
+      setErrorToast(i18n.t('create.create_error'));
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -474,22 +494,33 @@ export default function CreateScreen() {
           <Text style={styles.label}>{i18n.t('create.add_media')}</Text>
           <Text style={styles.helperText}>{i18n.t('create.media_helper')}</Text>
 
-          <Pressable style={styles.mediaButton} onPress={pickMedia}>
+          <Pressable
+            style={[styles.mediaButton, media.length >= 3 && styles.mediaButtonDisabled]}
+            onPress={pickMedia}
+            disabled={media.length >= 3}
+          >
             <Text style={styles.mediaButtonText}>{i18n.t('create.select_files')}</Text>
           </Pressable>
 
           {media.length > 0 && (
-            <View style={styles.mediaGrid}>
+            <Text style={styles.mediaCount}>{media.length} / 3</Text>
+          )}
+
+          {media.length > 0 && (
+            <View style={styles.mediaThumbnailRow}>
               {media.map((uri) => (
-                <View key={uri} style={styles.mediaCard}>
-                  <Image source={{ uri }} style={styles.mediaPreview} />
+                <View key={uri} style={styles.mediaThumbnailWrap}>
+                  <Image
+                    source={{ uri }}
+                    style={styles.mediaThumbnail}
+                    resizeMode="cover"
+                  />
                   <Pressable
-                    style={styles.removeMediaButton}
+                    style={styles.mediaThumbnailRemove}
                     onPress={() => removeMedia(uri)}
+                    hitSlop={8}
                   >
-                    <Text style={styles.removeMediaButtonText}>
-                      {i18n.t('create.remove')}
-                    </Text>
+                    <Text style={styles.mediaThumbnailRemoveText}>✕</Text>
                   </Pressable>
                 </View>
               ))}
@@ -499,30 +530,62 @@ export default function CreateScreen() {
 
         <View style={styles.section}>
           <Text style={styles.label}>{i18n.t('create.category_question')}</Text>
-          {!categoryManuallySelected && suggestedCategory && (
-            <Text style={styles.helperText}>{i18n.t('create.category_suggested_hint')}</Text>
-          )}
-          <View style={styles.categoryGrid}>
-            {JOB_CATEGORIES.map((category) => {
-              const isActive = selectedCategory === category;
-              return (
-                <Pressable
-                  key={category}
-                  style={[styles.categoryChip, isActive && styles.categoryChipActive]}
-                  onPress={() => {
-                    setSelectedCategory(category);
-                    setCategoryManuallySelected(true);
-                  }}
-                >
-                  <Text
-                    style={[styles.categoryChipText, isActive && styles.categoryChipTextActive]}
+
+          {topSuggestions.length > 0 && (
+            <Animated.View style={[styles.catSuggestRow, { opacity: suggestFade }]}>
+              {topSuggestions.map((cat) => {
+                const isActive = selectedCategory === cat;
+                return (
+                  <Pressable
+                    key={cat}
+                    style={({ pressed }) => [
+                      styles.catSuggestChip,
+                      isActive && styles.catSuggestChipActive,
+                      pressed && { opacity: 0.7 },
+                    ]}
+                    onPress={() => {
+                      setSelectedCategory(cat);
+                      setCategoryManuallySelected(true);
+                    }}
                   >
-                    {i18n.t(`preferences.categories.${category}`)}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
+                    <Ionicons
+                      name={CATEGORY_META[cat].icon as any}
+                      size={12}
+                      color={isActive ? colors.card : colors.textSecondary}
+                    />
+                    <Text style={[styles.catSuggestText, isActive && styles.catSuggestTextActive]}>
+                      {i18n.t(`preferences.categories.${cat}`)}
+                    </Text>
+                  </Pressable>
+                );
+              })}
+            </Animated.View>
+          )}
+
+          <Pressable
+            style={({ pressed }) => [
+              styles.catSelectorBtn,
+              selectedCategory != null && styles.catSelectorBtnSelected,
+              pressed && { opacity: 0.75 },
+            ]}
+            onPress={() => setShowCategorySheet(true)}
+          >
+            {selectedCategory != null && (
+              <View style={styles.catSelectorIconWrap}>
+                <Ionicons
+                  name={CATEGORY_META[selectedCategory].icon as any}
+                  size={15}
+                  color={colors.secondary}
+                />
+              </View>
+            )}
+            <Text style={[styles.catSelectorText, selectedCategory != null && styles.catSelectorTextSelected]}>
+              {selectedCategory
+                ? i18n.t(`preferences.categories.${selectedCategory}`)
+                : i18n.t('create.category_placeholder')}
+            </Text>
+            <Ionicons name="chevron-forward-outline" size={15} color={colors.placeholder} />
+          </Pressable>
         </View>
 
         <View style={styles.section}>
@@ -552,14 +615,14 @@ export default function CreateScreen() {
 
             <Pressable
               style={[
-                styles.priceButton,
+                styles.customPriceButton,
                 isCustomPrice && styles.priceButtonActive,
               ]}
               onPress={() => setSelectedPrice('custom')}
             >
               <Text
                 style={[
-                  styles.priceText,
+                  styles.customPriceButtonText,
                   isCustomPrice && styles.priceTextActive,
                 ]}
               >
@@ -584,7 +647,7 @@ export default function CreateScreen() {
 
           {showCustomPriceValidationError && (
             <Text style={styles.priceValidationErrorText}>
-              {i18n.t(customPriceValidationKey, { amount: MIN_JOB_BASE_PRICE })}
+              {i18n.t(customPriceValidationKey, { amount: customPriceValidationAmount })}
             </Text>
           )}
 
@@ -698,10 +761,14 @@ export default function CreateScreen() {
 
           <Pressable
             style={styles.notifyRow}
-            onPress={() =>
-              preferredBuddies.length > 0 &&
-              setNotifyPreferredBuddies((prev) => !prev)
-            }
+            onPress={() => {
+              if (notifyPreferredBuddies) {
+                setNotifyPreferredBuddies(false);
+              } else if (preferredBuddies.length > 0) {
+                setNotifyPreferredBuddies(true);
+                setShowBuddyModal(true);
+              }
+            }}
           >
             <Text style={styles.notifyLabel}>
               {i18n.t('create.notify_preferred_buddies_toggle')}
@@ -722,28 +789,7 @@ export default function CreateScreen() {
             </View>
           </Pressable>
 
-          {preferredBuddies.length > 0 ? (
-            <View style={styles.preferredBuddiesChips}>
-              {preferredBuddies.slice(0, 4).map((buddy) => (
-                <View
-                  key={buddy.id}
-                  style={[
-                    styles.preferredBuddyChip,
-                    notifyPreferredBuddies && styles.preferredBuddyChipActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.preferredBuddyChipText,
-                      notifyPreferredBuddies && styles.preferredBuddyChipTextActive,
-                    ]}
-                  >
-                    {buddy.name}
-                  </Text>
-                </View>
-              ))}
-            </View>
-          ) : (
+          {preferredBuddies.length === 0 && (
             <Text style={styles.helperText}>{i18n.t('create.no_preferred_buddies')}</Text>
           )}
         </View>
@@ -751,7 +797,6 @@ export default function CreateScreen() {
         {priceBreakdown && (
           <View style={styles.section}>
             <Text style={styles.label}>{i18n.t('create.submit_pricing_title')}</Text>
-            <Text style={styles.helperText}>{i18n.t('create.submit_pricing_hint')}</Text>
 
             <View style={styles.submitPricingCard}>
               <View style={styles.priceBreakdownRow}>
@@ -773,11 +818,14 @@ export default function CreateScreen() {
         )}
 
         <Pressable
-          style={[styles.submitButton, isSubmitBlockedByPrice && styles.submitButtonDisabled]}
+          style={[styles.submitButton, (!isFormValid || isSubmitting) && styles.submitButtonDisabled]}
           onPress={handleSubmit}
-          disabled={isSubmitBlockedByPrice}
+          disabled={!isFormValid || isSubmitting}
         >
-          <Text style={styles.submitText}>{i18n.t('create.find_buddy')}</Text>
+          {isSubmitting
+            ? <ActivityIndicator size="small" color={colors.card} />
+            : <Text style={styles.submitText}>{i18n.t('create.find_buddy')}</Text>
+          }
         </Pressable>
       </ScrollView>
 
@@ -796,6 +844,145 @@ export default function CreateScreen() {
         onCancel={handleTimeCancel}
         date={appointmentTime || new Date()}
       />
+
+      {errorToast && (
+        <View
+          style={[styles.errorToast, { bottom: insets.bottom + spacing.xxl }]}
+          pointerEvents="none"
+        >
+          <Text style={styles.errorToastText}>{errorToast}</Text>
+        </View>
+      )}
+
+      <Modal
+        visible={showCategorySheet}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowCategorySheet(false)}
+      >
+        <Pressable style={styles.modalOverlay} onPress={() => setShowCategorySheet(false)}>
+          <Pressable style={[styles.catSheetContainer, { paddingBottom: insets.bottom + spacing.xl }]} onPress={() => {}}>
+            <View style={styles.catSheetHandleBar} />
+            <View style={styles.catSheetHeader}>
+              <Text style={styles.catSheetTitle}>{i18n.t('create.category_question')}</Text>
+            </View>
+            <View style={styles.catSheetSearchWrap}>
+              <Ionicons name="search-outline" size={15} color={colors.placeholder} />
+              <TextInput
+                style={styles.catSheetSearchInput}
+                value={categorySearch}
+                onChangeText={setCategorySearch}
+                placeholder={i18n.t('create.category_search_placeholder')}
+                placeholderTextColor={colors.placeholder}
+                autoCorrect={false}
+                autoCapitalize="none"
+                clearButtonMode="while-editing"
+              />
+            </View>
+            <ScrollView style={styles.catSheetList} showsVerticalScrollIndicator={false}>
+              {JOB_CATEGORIES
+                .filter((cat) =>
+                  !categorySearch.trim() ||
+                  i18n.t(`preferences.categories.${cat}`)
+                    .toLowerCase()
+                    .includes(categorySearch.trim().toLowerCase())
+                )
+                .map((cat) => {
+                  const isActive = selectedCategory === cat;
+                  return (
+                    <Pressable
+                      key={cat}
+                      style={({ pressed }) => [
+                        styles.catSheetRow,
+                        pressed && { opacity: 0.6 },
+                      ]}
+                      onPress={() => {
+                        setSelectedCategory(cat);
+                        setCategoryManuallySelected(true);
+                        setShowCategorySheet(false);
+                        setCategorySearch('');
+                      }}
+                    >
+                      <View style={styles.catSheetRowLeft}>
+                        <View style={[styles.catSheetRowIcon, isActive && styles.catSheetRowIconActive]}>
+                          <Ionicons
+                            name={CATEGORY_META[cat].icon as any}
+                            size={15}
+                            color={isActive ? colors.secondary : colors.textSecondary}
+                          />
+                        </View>
+                        <Text style={[styles.catSheetRowText, isActive && styles.catSheetRowTextActive]}>
+                          {i18n.t(`preferences.categories.${cat}`)}
+                        </Text>
+                      </View>
+                      {isActive
+                        ? <Ionicons name="checkmark-circle" size={18} color={colors.secondary} />
+                        : <Ionicons name="chevron-forward-outline" size={13} color={colors.lightBorder} />
+                      }
+                    </Pressable>
+                  );
+                })}
+            </ScrollView>
+          </Pressable>
+        </Pressable>
+      </Modal>
+
+      <Modal
+        visible={showBuddyModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          setShowBuddyModal(false);
+          setNotifyPreferredBuddies(false);
+        }}
+      >
+        <Pressable
+          style={styles.modalOverlay}
+          onPress={() => {
+            setShowBuddyModal(false);
+            setNotifyPreferredBuddies(false);
+          }}
+        >
+          <Pressable style={[styles.modalSheet, { paddingBottom: insets.bottom + spacing.lg }]} onPress={() => {}}>
+            <View style={styles.modalHandle} />
+            <Text style={styles.modalTitle}>{i18n.t('create.buddy_modal_title')}</Text>
+            <Text style={styles.modalHelper}>{i18n.t('create.buddy_modal_helper')}</Text>
+
+            <ScrollView style={styles.modalList} showsVerticalScrollIndicator={false}>
+              {preferredBuddies.length === 0 ? (
+                <Text style={styles.modalEmpty}>{i18n.t('create.buddy_modal_empty')}</Text>
+              ) : (
+                preferredBuddies.map((buddy) => (
+                  <View key={buddy.id} style={styles.modalBuddyRow}>
+                    <View style={styles.modalBuddyAvatar}>
+                      <Text style={styles.modalBuddyAvatarText}>
+                        {buddy.name.charAt(0).toUpperCase()}
+                      </Text>
+                    </View>
+                    <Text style={styles.modalBuddyName}>{buddy.name}</Text>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+
+            <Pressable
+              style={styles.modalConfirmButton}
+              onPress={() => setShowBuddyModal(false)}
+            >
+              <Text style={styles.modalConfirmText}>{i18n.t('create.buddy_modal_confirm')}</Text>
+            </Pressable>
+            <Pressable
+              style={styles.modalCancelButton}
+              onPress={() => {
+                setShowBuddyModal(false);
+                setNotifyPreferredBuddies(false);
+              }}
+            >
+              <Text style={styles.modalCancelText}>{i18n.t('create.buddy_modal_cancel')}</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -855,65 +1042,196 @@ const styles = StyleSheet.create({
     color: colors.card,
     ...typography.buttonSecondary,
   },
-  mediaGrid: {
-    marginTop: spacing.lg,
-    gap: layout.sectionGap,
+  mediaButtonDisabled: {
+    opacity: 0.45,
   },
-  mediaCard: {
-    backgroundColor: colors.card,
-    borderRadius: layout.borderRadiusSmall,
-    padding: spacing.md,
-    shadowColor: '#000',
-    shadowOpacity: 0.06,
-    shadowRadius: spacing.lg,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: layout.shadowSmall,
+  mediaCount: {
+    ...typography.meta,
+    color: colors.textSecondary,
+    marginTop: spacing.sm,
+    textAlign: 'right',
   },
-  mediaPreview: {
+  mediaThumbnailRow: {
+    flexDirection: 'row',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  mediaThumbnailWrap: {
+    flex: 1,
+    position: 'relative',
+  },
+  mediaThumbnail: {
     width: '100%',
-    height: 160,
-    borderRadius: layout.borderRadiusSmall,
+    aspectRatio: 1,
+    borderRadius: 10,
     backgroundColor: colors.lightGreyVariant,
   },
-  removeMediaButton: {
-    marginTop: layout.componentGap,
-    alignSelf: 'flex-start',
-    backgroundColor: colors.primary,
-    borderRadius: spacing.lg,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
+  mediaThumbnailRemove: {
+    position: 'absolute',
+    top: -6,
+    right: -6,
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: colors.red,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 1,
+    borderWidth: 1.5,
+    borderColor: colors.card,
   },
-  removeMediaButtonText: {
+  mediaThumbnailRemoveText: {
     color: colors.card,
-    ...typography.metaStrong,
+    fontSize: 10,
+    fontWeight: '800',
+    lineHeight: 12,
   },
   priceGrid: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     gap: layout.sectionGap,
   },
-  categoryGrid: {
+  catSuggestRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
-    gap: layout.sectionGap,
+    gap: 6,
+    marginBottom: spacing.sm,
   },
-  categoryChip: {
-    backgroundColor: colors.lightGrey,
+  catSuggestChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: colors.veryLightGrey,
     borderRadius: 999,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
+  },
+  catSuggestChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  catSuggestText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    lineHeight: 17,
+  },
+  catSuggestTextActive: {
+    color: colors.card,
+  },
+  catSelectorBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
     borderWidth: 1,
     borderColor: colors.border,
+    borderRadius: layout.borderRadiusSmall,
+    paddingHorizontal: spacing.lg,
+    height: layout.inputHeight,
+    backgroundColor: colors.card,
+    gap: spacing.sm,
   },
-  categoryChipActive: {
-    backgroundColor: colors.secondary,
+  catSelectorBtnSelected: {
+    borderColor: colors.secondary,
   },
-  categoryChipText: {
+  catSelectorIconWrap: {
+    width: 28,
+    height: 28,
+    borderRadius: 8,
+    backgroundColor: colors.veryLightPurple,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  catSelectorText: {
+    ...typography.body,
+    color: colors.placeholder,
+    flex: 1,
+  },
+  catSelectorTextSelected: {
     color: colors.textPrimary,
-    ...typography.metaStrong,
+    fontWeight: '600',
   },
-  categoryChipTextActive: {
-    color: colors.card,
+  catSheetContainer: {
+    backgroundColor: colors.card,
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    paddingHorizontal: layout.screenPaddingX,
+    paddingTop: spacing.sm,
+  },
+  catSheetHandleBar: {
+    width: 32,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.lightBorder,
+    alignSelf: 'center',
+    marginBottom: spacing.md,
+  },
+  catSheetHeader: {
+    marginBottom: spacing.sm,
+  },
+  catSheetTitle: {
+    fontSize: 16,
+    fontWeight: '600',
+    color: colors.textPrimary,
+    letterSpacing: -0.2,
+  },
+
+  catSheetSearchWrap: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
+    backgroundColor: colors.veryLightGrey,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
+    paddingHorizontal: spacing.md,
+    height: 36,
+    marginBottom: spacing.sm,
+  },
+  catSheetSearchInput: {
+    flex: 1,
+    fontSize: 14,
+    color: colors.textPrimary,
+    height: 36,
+  },
+  catSheetList: {
+    maxHeight: 248,
+  },
+  catSheetRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingVertical: 10,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.veryLightGrey2,
+  },
+  catSheetRowLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    flex: 1,
+  },
+  catSheetRowIcon: {
+    width: 30,
+    height: 30,
+    borderRadius: 8,
+    backgroundColor: colors.veryLightGrey,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  catSheetRowIconActive: {
+    backgroundColor: colors.veryLightPurple,
+  },
+  catSheetRowText: {
+    fontSize: 15,
+    fontWeight: '400',
+    color: colors.textPrimary,
+    lineHeight: 21,
+  },
+  catSheetRowTextActive: {
+    color: colors.secondary,
+    fontWeight: '500',
   },
   priceButton: {
     backgroundColor: colors.lightGrey,
@@ -927,6 +1245,21 @@ const styles = StyleSheet.create({
   },
   priceButtonActive: {
     backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  customPriceButton: {
+    backgroundColor: colors.primary,
+    borderRadius: layout.borderRadiusSmall,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: layout.cardPadding,
+    minWidth: 80,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  customPriceButtonText: {
+    color: colors.card,
+    ...typography.cardTitle,
   },
   priceText: {
     color: colors.textPrimary,
@@ -1009,6 +1342,7 @@ const styles = StyleSheet.create({
   },
   timeButtonActive: {
     backgroundColor: colors.secondary,
+    borderColor: colors.secondary,
   },
   timeText: {
     color: colors.textPrimary,
@@ -1072,30 +1406,89 @@ const styles = StyleSheet.create({
   toggleHandleActive: {
     marginLeft: 18,
   },
-  preferredBuddiesChips: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: spacing.sm,
-    marginTop: spacing.md,
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.4)',
+    justifyContent: 'flex-end',
   },
-  preferredBuddyChip: {
-    backgroundColor: colors.veryLightPurple,
-    borderRadius: 999,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.md,
-    borderWidth: 1,
-    borderColor: 'transparent',
+  modalSheet: {
+    backgroundColor: colors.card,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: layout.screenPaddingX,
+    paddingTop: spacing.md,
+    gap: spacing.md,
   },
-  preferredBuddyChipActive: {
-    backgroundColor: colors.purpleBadge,
-    borderColor: 'rgba(103, 97, 168, 0.22)',
+  modalHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.lightBorder,
+    alignSelf: 'center',
+    marginBottom: spacing.sm,
   },
-  preferredBuddyChipText: {
+  modalTitle: {
+    ...typography.cardTitle,
+    color: colors.textPrimary,
+  },
+  modalHelper: {
     ...typography.meta,
-    color: colors.placeholder,
+    color: colors.textSecondary,
+    lineHeight: 19,
   },
-  preferredBuddyChipTextActive: {
+  modalList: {
+    maxHeight: 220,
+  },
+  modalEmpty: {
+    ...typography.body,
+    color: colors.placeholder,
+    textAlign: 'center',
+    paddingVertical: spacing.lg,
+  },
+  modalBuddyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.veryLightGrey2,
+  },
+  modalBuddyAvatar: {
+    width: 34,
+    height: 34,
+    borderRadius: 17,
+    backgroundColor: colors.veryLightPurple,
+    borderWidth: 1,
+    borderColor: colors.overlayLightPurple,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalBuddyAvatarText: {
+    ...typography.metaStrong,
     color: colors.secondary,
+  },
+  modalBuddyName: {
+    ...typography.bodyStrong,
+    color: colors.textPrimary,
+  },
+  modalConfirmButton: {
+    backgroundColor: colors.secondary,
+    borderRadius: layout.borderRadiusMedium,
+    paddingVertical: spacing.lg,
+    alignItems: 'center',
+    marginTop: spacing.sm,
+  },
+  modalConfirmText: {
+    ...typography.button,
+    color: colors.card,
+  },
+  modalCancelButton: {
+    alignItems: 'center',
+    paddingVertical: spacing.md,
+  },
+  modalCancelText: {
+    ...typography.metaStrong,
+    color: colors.textSecondary,
   },
   terminButton: {
     backgroundColor: colors.lightGrey,
@@ -1197,5 +1590,24 @@ const styles = StyleSheet.create({
     ...typography.meta,
     color: colors.textSecondary,
     textDecorationLine: 'underline',
+  },
+  errorToast: {
+    position: 'absolute',
+    left: layout.screenPaddingX,
+    right: layout.screenPaddingX,
+    backgroundColor: colors.red,
+    borderRadius: layout.borderRadiusSmall,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 6,
+  },
+  errorToastText: {
+    ...typography.metaStrong,
+    color: colors.card,
+    textAlign: 'center',
   },
 });

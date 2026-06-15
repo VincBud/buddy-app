@@ -1,18 +1,19 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { router, useFocusEffect } from 'expo-router';
-import { useCallback, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../lib/colors';
 import i18n, { useLanguage } from '../lib/i18n';
-import { isJobChatAccessible } from '../lib/job-actions';
+import { completeJob as completeJobAction, isJobChatAccessible } from '../lib/job-actions';
 import { getBuddyPointsForJob, isActiveJobStatus, Job } from '../lib/jobs';
+import { loadJobs as loadJobsService } from '../services/jobs.service';
+import { getBuddyScore, setBuddyScore } from '../services/user.service';
 import { goBackOrReplace } from '../lib/navigation';
-import { applyPaymentStateForJobStatus, ensureJobPaymentState } from '../lib/payments';
 import { layout, spacing } from '../lib/spacing';
 import { typography } from '../lib/typography';
 import { recordJobCompletionEarning } from '../lib/wallet';
-import { getActiveDevUserId } from '../lib/dev-session';
+import { getActiveUserId } from '../lib/auth';
 import { incrementReliabilityStats } from '../services/user.service';
 
 type Tab = 'now' | 'scheduled';
@@ -26,6 +27,15 @@ const cleanFlexibleRangeValue = (value: string): string => {
     .replace(/\{\s*range\s*\}|%\{\s*range\s*\}/gi, '')
     .replace(/^\s*(flexibel|flexible)\s*:?\s*/i, '')
     .trim();
+};
+
+const getCategoryIcon = (category: string): string => {
+  if (category === 'transport') return '🚗';
+  if (category === 'handyman') return '🔧';
+  if (category === 'household') return '🧹';
+  if (category === 'tech') return '💻';
+  if (category === 'errands') return '🛒';
+  return '🧩';
 };
 
 const getActiveJobTimingLabel = (job: Job): string => {
@@ -51,18 +61,44 @@ const getActiveJobTimingLabel = (job: Job): string => {
 
 export default function ActiveJobsScreen() {
   useLanguage();
+  const isEnglish = String(i18n.locale).toLowerCase().startsWith('en');
   const insets = useSafeAreaInsets();
   const [activeTab, setActiveTab] = useState<Tab>('now');
   const [acceptedJobs, setAcceptedJobs] = useState<Job[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [toast, setToast] = useState<{ message: string; variant: 'success' | 'error' } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (toast) {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      toastTimer.current = setTimeout(() => setToast(null), 2500);
+    }
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    };
+  }, [toast]);
+
+  const showToast = (message: string, variant: 'success' | 'error' = 'success') => {
+    setToast({ message, variant });
+  };
 
   const loadJobs = useCallback(async () => {
     try {
       setIsLoading(true);
-      const jobsRaw = await AsyncStorage.getItem('jobs');
-      const parsed = jobsRaw ? JSON.parse(jobsRaw) : [];
-      const safe: Job[] = Array.isArray(parsed) ? parsed : [];
-      setAcceptedJobs(safe.filter((j) => isActiveJobStatus(j.status)));
+      const jobs = await loadJobsService();
+      const userId = getActiveUserId();
+      const filtered = jobs.filter(
+        (j) =>
+          isActiveJobStatus(j.status) &&
+          // requesterId: owner's own active jobs
+          // match.selectedApplicationId: local-only buddy match (owner device set it)
+          // assignedBuddyId: server-backed buddy match (set by review_job_application RPC)
+          (j.requesterId === userId ||
+           j.match?.selectedApplicationId === userId ||
+           j.assignedBuddyId === userId)
+      );
+      setAcceptedJobs(filtered);
     } catch {
       setAcceptedJobs([]);
     } finally {
@@ -84,7 +120,8 @@ export default function ActiveJobsScreen() {
     if (!isJobChatAccessible(job)) {
       return;
     }
-
+    const userId = getActiveUserId();
+    const role = job.requesterId === userId ? 'auftraggeber' : 'buddy';
     router.push({
       pathname: '/chat',
       params: {
@@ -94,37 +131,18 @@ export default function ActiveJobsScreen() {
         time: job.time,
         timeMode: job.timeMode,
         creatorName: job.creatorName || i18n.t('common.default_user_name'),
-        currentUserRole: 'buddy',
+        currentUserRole: role,
       },
     });
   };
 
   const completeJob = async (job: Job) => {
     try {
-      const jobsRaw = await AsyncStorage.getItem('jobs');
-      const parsed = jobsRaw ? JSON.parse(jobsRaw) : [];
-      const safe: Job[] = Array.isArray(parsed) ? parsed : [];
-      const updated = safe.map((j) =>
-        j.id === job.id
-          ? {
-              ...j,
-              status: 'completed' as const,
-              payment: applyPaymentStateForJobStatus(
-                ensureJobPaymentState(j),
-                'completed'
-              ),
-            }
-          : j
-      );
-      const scoreRaw = await AsyncStorage.getItem('buddyScore');
-      const currentScore = scoreRaw ? Number(scoreRaw) : 0;
-      await AsyncStorage.setItem('jobs', JSON.stringify(updated));
-      await AsyncStorage.setItem(
-        'buddyScore',
-        (currentScore + getBuddyPointsForJob(job)).toString()
-      );
+      await completeJobAction({ jobId: job.id, completedByRole: 'buddy' });
+      const currentScore = await getBuddyScore();
+      await setBuddyScore(currentScore + getBuddyPointsForJob(job));
       await recordJobCompletionEarning(job);
-      await incrementReliabilityStats(getActiveDevUserId(), 'completedJobs');
+      await incrementReliabilityStats(getActiveUserId(), 'completedJobs');
       if (job.requesterId) {
         await incrementReliabilityStats(job.requesterId, 'completedJobs');
       }
@@ -136,75 +154,93 @@ export default function ActiveJobsScreen() {
         },
       });
     } catch {
-      alert(i18n.t('job.job_complete_error'));
+      showToast(isEnglish ? 'Could not complete job. Please try again.' : 'Abschluss fehlgeschlagen. Bitte erneut versuchen.', 'error');
     }
   };
 
   const nowJobs = acceptedJobs.filter(
-    (j) => !j.timeMode || j.timeMode === 'sofort' || j.timeMode === 'flexibel'
+    (j) =>
+      !j.timeMode ||
+      j.timeMode === 'sofort' ||
+      (j.timeMode === 'flexibel' && !j.appointmentDate)
   );
-  const scheduledJobs = acceptedJobs.filter((j) => j.timeMode === 'termin');
+  const scheduledJobs = acceptedJobs.filter(
+    (j) => j.timeMode === 'termin' || (j.timeMode === 'flexibel' && !!j.appointmentDate)
+  );
 
   const currentJobs = activeTab === 'now' ? nowJobs : scheduledJobs;
   const emptyKey =
     activeTab === 'now' ? 'profile.no_now_jobs' : 'profile.no_scheduled_jobs';
 
-  const renderJobCard = (job: Job) => (
-    <View key={job.id} style={styles.jobCard}>
-      <View style={styles.jobTopRow}>
-        <Text style={styles.jobProblem} numberOfLines={2}>
-          {job.problem}
-        </Text>
-        <View style={styles.pricePill}>
-          <Text style={styles.priceText}>{job.price}€</Text>
+  const renderJobCard = (job: Job) => {
+    const category = job.category ?? 'other';
+    return (
+      <View key={job.id} style={styles.jobCard}>
+        <View style={styles.categoryTopRow}>
+          <View style={styles.categoryChip}>
+            <Text style={styles.categoryChipText}>
+              {getCategoryIcon(category)} {i18n.t(`preferences.categories.${category}`)}
+            </Text>
+          </View>
+        </View>
+
+        <View style={styles.jobTopRow}>
+          <Text style={styles.jobProblem} numberOfLines={2}>
+            {job.problem}
+          </Text>
+          <View style={styles.pricePill}>
+            <Text style={styles.priceText}>{job.price}€</Text>
+          </View>
+        </View>
+
+        <View style={styles.jobMetaRow}>
+          {activeTab === 'scheduled' && job.appointmentDate ? (
+            <View style={styles.metaChip}>
+              <Text style={styles.metaChipText}>
+                {i18n.t('profile.scheduled_on', {
+                  date: job.appointmentDate,
+                  time: job.appointmentTime ?? '',
+                })}
+              </Text>
+            </View>
+          ) : (
+            <View style={styles.metaChip}>
+              <Text style={styles.metaChipText}>{getActiveJobTimingLabel(job)}</Text>
+            </View>
+          )}
+
+          {job.status === 'issue_reported' && (
+            <View style={styles.issueChip}>
+              <Text style={styles.issueChipText}>
+                {i18n.t('job.status_issue', { defaultValue: 'Problem gemeldet' })}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.jobActions}>
+          <Pressable
+            style={styles.chatButton}
+            onPress={() => openChat(job)}
+          >
+            <Text style={styles.chatButtonText}>
+              {i18n.t('profile.open_chat')}
+            </Text>
+          </Pressable>
+          {job.status !== 'issue_reported' && (
+            <Pressable
+              style={styles.completeButton}
+              onPress={() => completeJob(job)}
+            >
+              <Text style={styles.completeButtonText}>
+                {i18n.t('common.done')}
+              </Text>
+            </Pressable>
+          )}
         </View>
       </View>
-
-      <View style={styles.jobMetaRow}>
-        {activeTab === 'scheduled' && job.appointmentDate ? (
-          <View style={styles.metaChip}>
-            <Text style={styles.metaChipText}>
-              {i18n.t('profile.scheduled_on', {
-                date: job.appointmentDate,
-                time: job.appointmentTime ?? '',
-              })}
-            </Text>
-          </View>
-        ) : (
-          <View style={styles.metaChip}>
-            <Text style={styles.metaChipText}>{getActiveJobTimingLabel(job)}</Text>
-          </View>
-        )}
-
-        {job.category && (
-          <View style={styles.metaChip}>
-            <Text style={styles.metaChipText}>
-              {i18n.t(`preferences.categories.${job.category}`)}
-            </Text>
-          </View>
-        )}
-      </View>
-
-      <View style={styles.jobActions}>
-        <Pressable
-          style={styles.chatButton}
-          onPress={() => openChat(job)}
-        >
-          <Text style={styles.chatButtonText}>
-            {i18n.t('profile.open_chat')}
-          </Text>
-        </Pressable>
-        <Pressable
-          style={styles.completeButton}
-          onPress={() => completeJob(job)}
-        >
-          <Text style={styles.completeButtonText}>
-            {i18n.t('common.done')}
-          </Text>
-        </Pressable>
-      </View>
-    </View>
-  );
+    );
+  };
 
   return (
     <View
@@ -289,6 +325,19 @@ export default function ActiveJobsScreen() {
         </Pressable>
       </View>
 
+      {toast && (
+        <View
+          style={[
+            styles.toast,
+            toast.variant === 'error' && styles.toastError,
+            { bottom: insets.bottom + spacing.xxl },
+          ]}
+          pointerEvents="none"
+        >
+          <Text style={styles.toastText}>{toast.message}</Text>
+        </View>
+      )}
+
       {/* Content */}
       <ScrollView
         key={activeTab}
@@ -305,7 +354,18 @@ export default function ActiveJobsScreen() {
           </View>
         ) : currentJobs.length === 0 ? (
           <View style={styles.emptyState}>
+            <Ionicons
+              name={activeTab === 'now' ? 'flash-outline' : 'calendar-outline'}
+              size={36}
+              color={colors.secondary}
+              style={styles.emptyIcon}
+            />
             <Text style={styles.emptyText}>{i18n.t(emptyKey)}</Text>
+            <Text style={styles.emptyHint}>
+              {activeTab === 'now'
+                ? (isEnglish ? 'Browse the feed and apply for open jobs near you.' : 'Schau im Feed vorbei und bewirb dich auf offene Jobs in deiner Nähe.')
+                : (isEnglish ? 'Jobs with a fixed appointment appear here once you are hired.' : 'Terminbasierte Jobs erscheinen hier, sobald du ausgewählt wurdest.')}
+            </Text>
           </View>
         ) : (
           currentJobs.map(renderJobCard)
@@ -372,8 +432,8 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   tabActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
+    backgroundColor: colors.secondary,
+    borderColor: colors.secondary,
   },
   tabText: {
     ...typography.metaStrong,
@@ -385,19 +445,22 @@ const styles = StyleSheet.create({
   tabBadge: {
     minWidth: 20,
     height: 20,
-    borderRadius: 10,
-    backgroundColor: colors.border,
+    borderRadius: 999,
+    backgroundColor: colors.veryLightPurple,
+    borderWidth: 1,
+    borderColor: colors.overlayLightPurple,
     alignItems: 'center',
     justifyContent: 'center',
     paddingHorizontal: spacing.xs,
   },
   tabBadgeActive: {
-    backgroundColor: 'rgba(255,255,255,0.3)',
+    backgroundColor: 'rgba(255,255,255,0.22)',
+    borderColor: 'rgba(255,255,255,0.3)',
   },
   tabBadgeText: {
     fontSize: 11,
     fontWeight: '700',
-    color: colors.textSecondary,
+    color: colors.secondary,
     lineHeight: 14,
   },
   tabBadgeTextActive: {
@@ -409,7 +472,7 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: layout.screenPaddingX,
     paddingTop: spacing.lg,
-    gap: spacing.md,
+    gap: spacing.lg,
   },
   loadingContainer: {
     marginTop: spacing.xxxl,
@@ -429,46 +492,77 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  emptyIcon: {
+    marginBottom: spacing.md,
+  },
   emptyText: {
-    ...typography.body,
-    color: colors.textSecondary,
+    ...typography.sectionTitle,
+    color: colors.textPrimary,
     textAlign: 'center',
-    lineHeight: 22,
+  },
+  emptyHint: {
+    ...typography.meta,
+    color: colors.placeholder,
+    textAlign: 'center',
+    lineHeight: 19,
+    marginTop: spacing.sm,
   },
   jobCard: {
     backgroundColor: colors.card,
     borderRadius: layout.borderRadiusMedium,
     padding: spacing.lg,
     borderWidth: 1,
-    borderColor: colors.lightGrey,
+    borderColor: colors.border,
     shadowColor: '#000',
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    shadowOffset: { width: 0, height: 3 },
-    elevation: 2,
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
+  },
+  categoryTopRow: {
+    alignItems: 'flex-start',
+    marginBottom: spacing.md,
+  },
+  categoryChip: {
+    backgroundColor: colors.veryLightPurple,
+    borderRadius: 999,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.overlayLightPurple,
+  },
+  categoryChipText: {
+    color: colors.secondary,
+    ...typography.metaStrong,
   },
   jobTopRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: spacing.md,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
   },
   jobProblem: {
-    ...typography.cardTitle,
     color: colors.textPrimary,
+    fontSize: 21,
+    fontWeight: '800',
+    lineHeight: 28,
     flex: 1,
   },
   pricePill: {
     backgroundColor: colors.lightOrange,
     borderRadius: 999,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.xs,
+    paddingVertical: spacing.sm,
+    alignItems: 'center',
+    justifyContent: 'center',
     borderWidth: 1,
     borderColor: '#FFD4C7',
+    minWidth: 94,
   },
   priceText: {
-    ...typography.metaStrong,
     color: colors.primary,
+    fontSize: 22,
+    fontWeight: '800',
   },
   jobMetaRow: {
     flexDirection: 'row',
@@ -477,7 +571,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   metaChip: {
-    backgroundColor: colors.lightGrey,
+    backgroundColor: colors.veryLightGrey,
     borderRadius: 999,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.xs,
@@ -488,6 +582,19 @@ const styles = StyleSheet.create({
     ...typography.meta,
     color: colors.textSecondary,
   },
+  issueChip: {
+    backgroundColor: '#FFF7ED',
+    borderRadius: 999,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderWidth: 1,
+    borderColor: '#FFEDD5',
+  },
+  issueChipText: {
+    ...typography.meta,
+    color: colors.primary,
+    fontWeight: '600',
+  },
   jobActions: {
     flexDirection: 'row',
     gap: spacing.sm,
@@ -495,7 +602,7 @@ const styles = StyleSheet.create({
   chatButton: {
     flex: 1,
     backgroundColor: colors.secondary,
-    borderRadius: layout.borderRadiusSmall,
+    borderRadius: 10,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
     alignItems: 'center',
@@ -507,7 +614,7 @@ const styles = StyleSheet.create({
   completeButton: {
     flex: 1,
     backgroundColor: colors.alternateGreen,
-    borderRadius: layout.borderRadiusSmall,
+    borderRadius: 10,
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
     alignItems: 'center',
@@ -515,5 +622,27 @@ const styles = StyleSheet.create({
   completeButtonText: {
     ...typography.buttonSecondary,
     color: colors.card,
+  },
+  toast: {
+    position: 'absolute',
+    left: layout.screenPaddingX,
+    right: layout.screenPaddingX,
+    backgroundColor: colors.green,
+    borderRadius: layout.borderRadiusSmall,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 6,
+  },
+  toastError: {
+    backgroundColor: colors.red,
+  },
+  toastText: {
+    ...typography.metaStrong,
+    color: colors.card,
+    textAlign: 'center',
   },
 });

@@ -7,11 +7,12 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
-import { Alert, Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../lib/colors';
+import { STORAGE_KEYS } from '../../lib/storage-keys';
 import { loadCurrentUser } from '../../lib/current-user';
-import { DEV_USERS, getActiveDevUserId, useDevSession } from '../../lib/dev-session';
+import { getActiveUserId } from '../../lib/auth';
 import i18n, { getLanguage, setLanguage, useLanguage } from '../../lib/i18n';
 import { getActiveOwnJobs, getMatchedBuddyId, getMatchedBuddyName, isActiveJobStatus, isEligibleForRebooking, Job } from '../../lib/jobs';
 import { getLevelInfo } from '../../lib/levels';
@@ -25,7 +26,8 @@ import { layout, spacing } from '../../lib/spacing';
 import { getTrustStarFillRatio, ReliabilitySignal } from '../../lib/trust';
 import { typography } from '../../lib/typography';
 import { loadUserProfile, updateUserProfile } from '../../lib/user-profile';
-import { getComputedReliability } from '../../services/user.service';
+import { getBuddyScore, getComputedReliability } from '../../services/user.service';
+import { loadJobs as loadJobsService } from '../../services/jobs.service';
 
 type ProfileSnapshot = {
   allJobs: Job[];
@@ -43,24 +45,29 @@ type ProfileSnapshot = {
 };
 
 const loadProfileSnapshot = async (): Promise<ProfileSnapshot> => {
-  const activeUserId = getActiveDevUserId();
-  const [jobsRaw, scoreRaw, userProfile, loadedPreferences, loadedPreferredBuddies, currentUser, reliabilitySignal] =
+  const activeUserId = getActiveUserId();
+  const [safeJobs, score, userProfile, loadedPreferences, loadedPreferredBuddies, currentUser, reliabilitySignal] =
     await Promise.all([
-      AsyncStorage.getItem('jobs'),
-      AsyncStorage.getItem('buddyScore'),
+      loadJobsService(),
+      getBuddyScore(),
       loadUserProfile(),
-      loadUserPreferences(),
+      loadUserPreferences(activeUserId || undefined),
       loadPreferredBuddies(),
       loadCurrentUser(),
       getComputedReliability(activeUserId),
     ]);
 
-  const parsedJobs = jobsRaw ? JSON.parse(jobsRaw) : [];
-  const safeJobs: Job[] = Array.isArray(parsedJobs) ? parsedJobs : [];
-  const acceptedJobs = safeJobs.filter((job: Job) => isActiveJobStatus(job.status));
-  const completedJobs = safeJobs.filter((job: Job) => job.status === 'completed');
+  const acceptedJobs = safeJobs.filter(
+    (job: Job) =>
+      isActiveJobStatus(job.status) &&
+      (job.requesterId === activeUserId || job.match?.selectedApplicationId === activeUserId)
+  );
+  const completedJobs = safeJobs.filter(
+    (job: Job) =>
+      job.status === 'completed' &&
+      job.match?.selectedApplicationId === activeUserId
+  );
   const ownPostedJobs = getActiveOwnJobs(safeJobs, activeUserId);
-  const parsedScore = scoreRaw ? Number(scoreRaw) : 0;
   const wallet = await loadWalletSnapshot(completedJobs);
 
   return {
@@ -68,7 +75,7 @@ const loadProfileSnapshot = async (): Promise<ProfileSnapshot> => {
     acceptedJobs,
     completedJobs,
     ownPostedJobs,
-    score: Number.isFinite(parsedScore) ? parsedScore : 0,
+    score,
     preferences: loadedPreferences,
     preferredBuddies: loadedPreferredBuddies,
     profileImageUri: userProfile.profileImageUri,
@@ -83,8 +90,6 @@ export default function ProfileScreen() {
   useLanguage();
   const insets = useSafeAreaInsets();
   const currentLanguage = getLanguage();
-  const { activeUser, switchUser } = useDevSession();
-  const [allJobs, setAllJobs] = useState<Job[]>([]);
   const [acceptedJobs, setAcceptedJobs] = useState<Job[]>([]);
   const [completedJobs, setCompletedJobs] = useState<Job[]>([]);
   const [ownPostedJobs, setOwnPostedJobs] = useState<Job[]>([]);
@@ -104,7 +109,6 @@ export default function ProfileScreen() {
       setIsLoading(true);
       const snapshot = await loadProfileSnapshot();
 
-      setAllJobs(snapshot.allJobs);
       setAcceptedJobs(snapshot.acceptedJobs);
       setCompletedJobs(snapshot.completedJobs);
       setOwnPostedJobs(snapshot.ownPostedJobs);
@@ -140,7 +144,7 @@ export default function ProfileScreen() {
 
   const switchLanguage = async (lang: 'de' | 'en') => {
     setLanguage(lang);
-    await AsyncStorage.setItem('appLanguage', lang);
+    await AsyncStorage.setItem(STORAGE_KEYS.APP_LANGUAGE, lang);
     router.replace('/(tabs)/profile');
   };
 
@@ -296,7 +300,7 @@ export default function ProfileScreen() {
                 <Image source={{ uri: profileImageUri }} style={styles.avatarImage} />
               ) : (
                 <Text style={styles.avatarText}>
-                  {(displayName || activeUser.name).charAt(0).toUpperCase()}
+                  {(displayName).charAt(0).toUpperCase()}
                 </Text>
               )}
             </View>
@@ -307,7 +311,7 @@ export default function ProfileScreen() {
 
           <View style={styles.identityMeta}>
             <Text style={styles.name} numberOfLines={1}>
-              {displayName || activeUser.name}
+              {displayName}
             </Text>
             <Text style={styles.identitySubtitle} numberOfLines={2}>
               {i18n.t('profile.identity_subtitle')}
@@ -368,16 +372,71 @@ export default function ProfileScreen() {
               reliabilitySignal === 'trusted' && styles.reliabilityBadgeTrusted,
               reliabilitySignal === 'steady' && styles.reliabilityBadgeSteady,
             ]}>
-              <Text style={[
-                styles.reliabilityBadgeText,
-                reliabilitySignal === 'trusted' && styles.reliabilityBadgeTextTrusted,
-                reliabilitySignal === 'steady' && styles.reliabilityBadgeTextSteady,
-              ]}>
-                {i18n.t(`job.trust_reliability_${reliabilitySignal}`)}
+              <Text
+                style={[
+                  styles.reliabilityBadgeText,
+                  reliabilitySignal === 'trusted' && styles.reliabilityBadgeTextTrusted,
+                  reliabilitySignal === 'steady' && styles.reliabilityBadgeTextSteady,
+                ]}
+                numberOfLines={1}
+              >
+                {i18n.t(`chat.trust_reliability_${reliabilitySignal}`, { defaultValue: reliabilitySignal })}
               </Text>
             </View>
           </View>
         </View>
+      </View>
+
+      <View style={styles.card}>
+        <Text style={styles.sectionTitle}>{i18n.t('profile.review_summary')}</Text>
+        {reviewCount > 0 ? (
+          <>
+            <View style={styles.reviewRatingRow}>
+              <Text style={styles.reviewRatingNumber}>{averageRating.toFixed(1)}</Text>
+              <View style={styles.reviewRatingMeta}>
+                <Text style={styles.reviewStarsLarge}>
+                  {'★'.repeat(Math.round(averageRating))}{'☆'.repeat(5 - Math.round(averageRating))}
+                </Text>
+                <Text style={styles.reviewRatingCount}>
+                  {i18n.t('profile.total_reviews', { count: reviewCount })}
+                </Text>
+              </View>
+              {isTopBuddy(averageRating, reviewCount) && (
+                <View style={styles.topBuddyBadge}>
+                  <Text style={styles.topBuddyBadgeText}>{i18n.t('feed.top_buddy_badge')}</Text>
+                </View>
+              )}
+            </View>
+            {recentReviews.length > 0 && (
+              <View>
+                <Text style={styles.recentReviewsTitle}>
+                  {i18n.t('profile.recent_reviews')}
+                </Text>
+                {recentReviews.map((entry) => (
+                  <View key={entry.job.id} style={styles.reviewRow}>
+                    <Text style={styles.reviewStars}>
+                      {'★'.repeat(entry.review?.rating ?? 0)}{'☆'.repeat(5 - (entry.review?.rating ?? 0))}
+                    </Text>
+                    <Text style={styles.reviewMeta}>
+                      {i18n.t('profile.review_by', {
+                        name: entry.review?.reviewerName ?? i18n.t('common.default_user_name'),
+                      })}{' · '}
+                      {formatReviewDate(entry.review?.reviewedAt ?? new Date().toISOString())}
+                    </Text>
+                    {entry.review?.reviewText ? (
+                      <Text style={styles.reviewText}>{entry.review.reviewText}</Text>
+                    ) : null}
+                  </View>
+                ))}
+              </View>
+            )}
+          </>
+        ) : (
+          <View style={styles.emptyStateCard}>
+            <Text style={styles.emptyStateTitle}>{i18n.t('profile.no_reviews_title')}</Text>
+            <Text style={styles.emptyText}>{i18n.t('profile.no_reviews_hint')}</Text>
+          </View>
+        )}
       </View>
 
       <View style={styles.levelCard}>
@@ -562,67 +621,10 @@ export default function ProfileScreen() {
         </View>
       </Pressable>
 
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>{i18n.t('profile.review_summary')}</Text>
-        {reviewCount > 0 ? (
-          <>
-            <View style={styles.reviewRatingRow}>
-              <Text style={styles.reviewRatingNumber}>{averageRating.toFixed(1)}</Text>
-              <View style={styles.reviewRatingMeta}>
-                <Text style={styles.reviewStarsLarge}>
-                  {'★'.repeat(Math.round(averageRating))}{'☆'.repeat(5 - Math.round(averageRating))}
-                </Text>
-                <Text style={styles.reviewRatingCount}>
-                  {i18n.t('profile.total_reviews', { count: reviewCount })}
-                </Text>
-              </View>
-              {isTopBuddy(averageRating, reviewCount) && (
-                <View style={styles.topBuddyBadge}>
-                  <Text style={styles.topBuddyBadgeText}>{i18n.t('feed.top_buddy_badge')}</Text>
-                </View>
-              )}
-            </View>
-            {recentReviews.length > 0 && (
-              <View>
-                <Text style={styles.recentReviewsTitle}>
-                  {i18n.t('profile.recent_reviews')}
-                </Text>
-                {recentReviews.map((entry) => (
-                  <View key={entry.job.id} style={styles.reviewRow}>
-                    <Text style={styles.reviewStars}>
-                      {'★'.repeat(entry.review?.rating ?? 0)}{'☆'.repeat(5 - (entry.review?.rating ?? 0))}
-                    </Text>
-                    <Text style={styles.reviewMeta}>
-                      {i18n.t('profile.review_by', {
-                        name: entry.review?.reviewerName ?? i18n.t('common.default_user_name'),
-                      })}{' · '}
-                      {formatReviewDate(entry.review?.reviewedAt ?? new Date().toISOString())}
-                    </Text>
-                    {entry.review?.reviewText ? (
-                      <Text style={styles.reviewText}>{entry.review.reviewText}</Text>
-                    ) : null}
-                  </View>
-                ))}
-              </View>
-            )}
-          </>
-        ) : (
-          <View style={styles.emptyStateCard}>
-            <Text style={styles.emptyStateTitle}>{i18n.t('profile.no_reviews_title')}</Text>
-            <Text style={styles.emptyText}>{i18n.t('profile.no_reviews_hint')}</Text>
-          </View>
-        )}
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.sectionTitle}>{i18n.t('profile.your_buddies')}</Text>
-
-        {preferredBuddies.length === 0 ? (
-          <View style={styles.emptyStateCard}>
-            <Text style={styles.emptyText}>{i18n.t('profile.no_buddies')}</Text>
-          </View>
-        ) : (
-          preferredBuddies.map((buddy) => (
+      {preferredBuddies.length > 0 && (
+        <View style={styles.card}>
+          <Text style={styles.sectionTitle}>{i18n.t('profile.your_buddies')}</Text>
+          {preferredBuddies.map((buddy) => (
             <View key={buddy.id} style={styles.buddyRow}>
               <View style={styles.buddyAvatar}>
                 <Text style={styles.buddyAvatarText}>
@@ -653,9 +655,9 @@ export default function ProfileScreen() {
                 </Text>
               </Pressable>
             </View>
-          ))
-        )}
-      </View>
+          ))}
+        </View>
+      )}
 
       <Pressable
         style={styles.activeJobsHeader}
@@ -873,45 +875,6 @@ export default function ProfileScreen() {
           </View>
         </View>
 
-        <Pressable
-          style={styles.logoutRow}
-          onPress={() =>
-            Alert.alert(
-              i18n.t('profile.logout'),
-              i18n.t('profile.logout_coming_soon')
-            )
-          }
-        >
-          <Text style={styles.logoutText}>{i18n.t('profile.logout')}</Text>
-          <Text style={styles.logoutHint}>{i18n.t('profile.logout_hint')}</Text>
-        </Pressable>
-      </View>
-
-      <View style={styles.devCard}>
-        <Text style={styles.devSectionTitle}>Dev — Active User</Text>
-        <View style={styles.devUserRow}>
-          {DEV_USERS.map((u) => (
-            <Pressable
-              key={u.id}
-              style={[styles.devUserButton, activeUser.id === u.id && styles.devUserButtonActive]}
-              onPress={async () => { await switchUser(u.id); loadProfileData(); }}
-            >
-              <Text style={[styles.devUserButtonText, activeUser.id === u.id && styles.devUserButtonTextActive]}>
-                {u.label}
-              </Text>
-              <Text style={styles.devUserButtonSub}>{u.name} · {u.role}</Text>
-            </Pressable>
-          ))}
-        </View>
-        <View style={styles.devDebugPanel}>
-          <Text style={styles.devSectionTitle}>Job State ({allJobs.length})</Text>
-          {allJobs.map((job) => (
-            <Text key={job.id} style={styles.devLine}>
-              [{job.status}] {job.problem.slice(0, 32)}{job.requesterId === activeUser.id ? ' (owner)' : ''}
-            </Text>
-          ))}
-          {allJobs.length === 0 && <Text style={styles.devLine}>No jobs</Text>}
-        </View>
       </View>
 
       </>)}
@@ -1288,11 +1251,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: spacing.sm,
   },
-  info: {
-    ...typography.bodyStrong,
-    color: colors.textPrimary,
-    marginBottom: spacing.xs,
-  },
   statTile: {
     flex: 1,
     backgroundColor: colors.lightGrey,
@@ -1581,22 +1539,6 @@ const styles = StyleSheet.create({
     color: colors.card,
     ...typography.buttonSecondary,
   },
-  preferenceSummary: {
-    ...typography.body,
-    color: colors.textSecondary,
-    marginBottom: spacing.md,
-  },
-  preferencesButton: {
-    backgroundColor: colors.secondary,
-    borderRadius: layout.borderRadiusSmall,
-    paddingVertical: spacing.md,
-    alignItems: 'center',
-    marginTop: spacing.xs,
-  },
-  preferencesButtonText: {
-    ...typography.buttonSecondary,
-    color: colors.card,
-  },
   activeJobsHeader: {
     backgroundColor: colors.card,
     borderRadius: layout.borderRadiusMedium,
@@ -1730,64 +1672,6 @@ const styles = StyleSheet.create({
     ...typography.meta,
     color: colors.secondary,
   },
-  devCard: {
-    backgroundColor: '#1a1a2e',
-    borderRadius: layout.borderRadiusMedium,
-    padding: spacing.lg,
-    marginBottom: spacing.lg,
-    borderWidth: 1,
-    borderColor: '#333366',
-  },
-  devSectionTitle: {
-    ...typography.metaStrong,
-    color: '#a0a0cc',
-    marginBottom: spacing.sm,
-  },
-  devUserRow: {
-    flexDirection: 'row',
-    gap: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  devUserButton: {
-    flex: 1,
-    backgroundColor: '#2a2a4a',
-    borderRadius: layout.borderRadiusSmall,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#444477',
-  },
-  devUserButtonActive: {
-    backgroundColor: '#4444aa',
-    borderColor: '#8888ff',
-  },
-  devUserButtonText: {
-    ...typography.metaStrong,
-    color: '#a0a0cc',
-  },
-  devUserButtonTextActive: {
-    color: '#ffffff',
-  },
-  devUserButtonSub: {
-    ...typography.meta,
-    color: '#666699',
-    marginTop: 2,
-    textAlign: 'center',
-  },
-  devDebugPanel: {
-    backgroundColor: '#111122',
-    borderRadius: layout.borderRadiusSmall,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: '#222244',
-  },
-  devLine: {
-    ...typography.meta,
-    color: '#7777aa',
-    fontFamily: 'monospace',
-    lineHeight: 18,
-  },
   reliabilityBadge: {
     borderRadius: 999,
     paddingVertical: 2,
@@ -1795,6 +1679,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.lightGrey,
     borderWidth: 1,
     borderColor: colors.border,
+    flexShrink: 1,
+    maxWidth: 140,
   },
   reliabilityBadgeSteady: {
     backgroundColor: colors.veryLightPurple,
@@ -1844,20 +1730,5 @@ const styles = StyleSheet.create({
   reviewRatingCount: {
     ...typography.meta,
     color: colors.textSecondary,
-  },
-  logoutRow: {
-    paddingVertical: spacing.lg,
-    marginTop: spacing.xs,
-    borderTopWidth: 1,
-    borderTopColor: colors.veryLightGrey2,
-  },
-  logoutText: {
-    ...typography.bodyStrong,
-    color: colors.placeholder,
-  },
-  logoutHint: {
-    ...typography.meta,
-    color: colors.placeholder,
-    marginTop: spacing.xs,
   },
 });

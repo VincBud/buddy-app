@@ -20,12 +20,14 @@ export const getWalletSnapshot = async (
   completedJobs: Job[],
   _userId?: string
 ): Promise<WalletSnapshot> => {
+  // TODO(backend): SELECT * FROM wallet_transactions WHERE user_id = auth.uid() ORDER BY created_at DESC
   return loadWalletSnapshot(completedJobs);
 };
 
 export const getWalletSnapshotFromStorage = async (
   _userId?: string
 ): Promise<WalletSnapshot> => {
+  // TODO(backend): same as getWalletSnapshot — remove this variant; storage is the canonical source until then
   return loadWalletSnapshotFromStorage();
 };
 
@@ -33,6 +35,8 @@ export const recordEarning = async (
   job: Parameters<typeof recordJobCompletionEarning>[0],
   _userId?: string
 ): Promise<void> => {
+  // TODO(backend): INSERT INTO wallet_transactions (user_id, job_id, amount, type) VALUES (auth.uid(), ...)
+  // In production, earnings are recorded server-side via a webhook after payment release — not from the client.
   return recordJobCompletionEarning(job);
 };
 
@@ -40,11 +44,14 @@ export const requestPayout = async (
   completedJobs: Job[],
   _userId?: string
 ): Promise<Awaited<ReturnType<typeof requestWalletPayout>>> => {
+  // TODO(backend): call supabase.rpc('request_payout', { user_id: auth.uid() })
+  // Stripe Connect payout is triggered server-side; this call enqueues the request.
   return requestWalletPayout(completedJobs);
 };
 
 export const requestPayoutFromStorage = async (
   _userId?: string
 ): Promise<Awaited<ReturnType<typeof requestWalletPayoutFromStorage>>> => {
+  // TODO(backend): same as requestPayout — consolidate once wallet_transactions table exists
   return requestWalletPayoutFromStorage();
 };

@@ -1,4 +1,4 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
@@ -16,6 +16,7 @@ import i18n, { useLanguage } from '../lib/i18n';
 import {
     applyJobExpiry,
     canExtendJob,
+    canRepostJob,
     extendJobExpiry,
     getActiveOwnJobs,
     getHistoricalOwnJobs,
@@ -26,16 +27,18 @@ import {
     isJobEditable,
     isJobPauseable,
     Job,
-    LOCAL_USER_ID,
     TimeMode,
 } from '../lib/jobs';
+import { getActiveUserId } from '../lib/auth';
 import {
+    cancelJob,
     editJobFields,
     EditableJobFields,
     pauseJob,
     repostJob,
     resumeJob,
 } from '../lib/job-actions';
+import { loadJobs, saveJobs } from '../services/jobs.service';
 import { layout, spacing } from '../lib/spacing';
 import { typography } from '../lib/typography';
 
@@ -78,6 +81,8 @@ export default function MyPostedJobsScreen() {
 
   const [successToast, setSuccessToast] = useState<string | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const [errorToast, setErrorToast] = useState<string | null>(null);
+  const errorToastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (successToast) {
@@ -89,27 +94,36 @@ export default function MyPostedJobsScreen() {
     };
   }, [successToast]);
 
+  useEffect(() => {
+    if (errorToast) {
+      if (errorToastTimer.current) clearTimeout(errorToastTimer.current);
+      errorToastTimer.current = setTimeout(() => setErrorToast(null), 2500);
+    }
+    return () => {
+      if (errorToastTimer.current) clearTimeout(errorToastTimer.current);
+    };
+  }, [errorToast]);
+
   const loadMyJobs = useCallback(async () => {
     try {
       setIsLoading(true);
-      const jobsRaw = await AsyncStorage.getItem('jobs');
-      const parsed = jobsRaw ? JSON.parse(jobsRaw) : [];
-      const safe: Job[] = Array.isArray(parsed) ? parsed : [];
+      const safe = await loadJobs();
 
       const { jobs: withExpiry, changed } = applyJobExpiry(safe);
       if (changed) {
-        await AsyncStorage.setItem('jobs', JSON.stringify(withExpiry));
+        await saveJobs(withExpiry);
       }
 
-      const active = getActiveOwnJobs(withExpiry, LOCAL_USER_ID);
+      const activeUserId = getActiveUserId();
+      const active = getActiveOwnJobs(withExpiry, activeUserId);
       active.sort((a, b) => {
         if (!a.expiresAt) return 1;
         if (!b.expiresAt) return -1;
         return new Date(a.expiresAt).getTime() - new Date(b.expiresAt).getTime();
       });
 
-      const paused = getPausedOwnJobs(withExpiry, LOCAL_USER_ID);
-      const historical = getHistoricalOwnJobs(withExpiry, LOCAL_USER_ID);
+      const paused = getPausedOwnJobs(withExpiry, activeUserId);
+      const historical = getHistoricalOwnJobs(withExpiry, activeUserId);
       historical.sort((a, b) =>
         new Date(b.updatedAt ?? b.createdAt ?? 0).getTime() -
         new Date(a.updatedAt ?? a.createdAt ?? 0).getTime()
@@ -152,9 +166,7 @@ export default function MyPostedJobsScreen() {
     setExtendingJob(null);
 
     try {
-      const jobsRaw = await AsyncStorage.getItem('jobs');
-      const parsed = jobsRaw ? JSON.parse(jobsRaw) : [];
-      const safe: Job[] = Array.isArray(parsed) ? parsed : [];
+      const safe = await loadJobs();
 
       let extendedJob: Job | null = null;
       const updatedAll = safe.map((j) => {
@@ -167,7 +179,7 @@ export default function MyPostedJobsScreen() {
 
       if (!extendedJob) return;
 
-      await AsyncStorage.setItem('jobs', JSON.stringify(updatedAll));
+      await saveJobs(updatedAll);
 
       setActiveJobs((prev) =>
         prev
@@ -182,6 +194,7 @@ export default function MyPostedJobsScreen() {
       setSuccessToast(isEn ? `Extended by ${chosenLabel} ✓` : `Laufzeit um ${chosenLabel} verlängert ✓`);
     } catch {
       loadMyJobs();
+      setErrorToast(isEn ? 'Could not extend job.' : 'Verlängerung fehlgeschlagen.');
     }
   };
 
@@ -192,19 +205,12 @@ export default function MyPostedJobsScreen() {
     setCancellingJob(null);
 
     try {
-      const jobsRaw = await AsyncStorage.getItem('jobs');
-      const parsed = jobsRaw ? JSON.parse(jobsRaw) : [];
-      const safe: Job[] = Array.isArray(parsed) ? parsed : [];
-
-      const updatedAll = safe.map((j) =>
-        String(j.id) === String(jobId) ? { ...j, status: 'cancelled' as const } : j
-      );
-
-      await AsyncStorage.setItem('jobs', JSON.stringify(updatedAll));
+      await cancelJob({ jobId, cancelledByRole: 'auftraggeber', reason: 'no_longer_needed' });
       setActiveJobs((prev) => prev.filter((j) => String(j.id) !== String(jobId)));
       setSuccessToast(isEn ? 'Job cancelled ✓' : 'Job wurde abgebrochen ✓');
     } catch {
       loadMyJobs();
+      setErrorToast(isEn ? 'Could not cancel job.' : 'Abbrechen fehlgeschlagen.');
     }
   };
 
@@ -215,20 +221,21 @@ export default function MyPostedJobsScreen() {
     setPausingJob(null);
 
     try {
-      const { updatedJob } = await pauseJob({ jobId: job.id, ownerId: LOCAL_USER_ID });
+      const { updatedJob } = await pauseJob({ jobId: job.id, ownerId: getActiveUserId() });
       if (!updatedJob) return;
       setActiveJobs((prev) => prev.filter((j) => String(j.id) !== String(job.id)));
       setPausedJobs((prev) => [updatedJob, ...prev]);
       setSuccessToast(isEn ? 'Job paused ✓' : 'Job pausiert ✓');
     } catch {
       loadMyJobs();
+      setErrorToast(isEn ? 'Could not pause job.' : 'Pausieren fehlgeschlagen.');
     }
   };
 
   // --- Resume ---
   const confirmResume = async (job: Job) => {
     try {
-      const { updatedJob } = await resumeJob({ jobId: job.id, ownerId: LOCAL_USER_ID });
+      const { updatedJob } = await resumeJob({ jobId: job.id, ownerId: getActiveUserId() });
       if (!updatedJob) return;
       setPausedJobs((prev) => prev.filter((j) => String(j.id) !== String(job.id)));
       setActiveJobs((prev) =>
@@ -241,6 +248,7 @@ export default function MyPostedJobsScreen() {
       setSuccessToast(isEn ? 'Job resumed ✓' : 'Job fortgesetzt ✓');
     } catch {
       loadMyJobs();
+      setErrorToast(isEn ? 'Could not resume job.' : 'Fortsetzen fehlgeschlagen.');
     }
   };
 
@@ -250,13 +258,19 @@ export default function MyPostedJobsScreen() {
     const job = repostingJob;
     setRepostingJob(null);
 
+    if (!canRepostJob(job)) {
+      setErrorToast(isEn ? 'Repost window has expired.' : 'Erneut posten nicht mehr möglich.');
+      return;
+    }
+
     try {
-      const { newJob } = await repostJob({ sourceJobId: job.id, ownerId: LOCAL_USER_ID });
+      const { newJob } = await repostJob({ sourceJobId: job.id, ownerId: getActiveUserId() });
       if (!newJob) return;
       setActiveJobs((prev) => [newJob, ...prev]);
       setSuccessToast(isEn ? 'Job reposted ✓' : 'Job erneut gepostet ✓');
     } catch {
       loadMyJobs();
+      setErrorToast(isEn ? 'Could not repost job.' : 'Erneut posten fehlgeschlagen.');
     }
   };
 
@@ -286,7 +300,7 @@ export default function MyPostedJobsScreen() {
     try {
       const { updatedJob } = await editJobFields({
         jobId: job.id,
-        ownerId: LOCAL_USER_ID,
+        ownerId: getActiveUserId(),
         fields,
       });
       if (!updatedJob) return;
@@ -296,6 +310,7 @@ export default function MyPostedJobsScreen() {
       setSuccessToast(isEn ? 'Job updated ✓' : 'Job aktualisiert ✓');
     } catch {
       loadMyJobs();
+      setErrorToast(isEn ? 'Could not update job.' : 'Aktualisieren fehlgeschlagen.');
     }
   };
 
@@ -959,6 +974,11 @@ export default function MyPostedJobsScreen() {
           <Text style={styles.toastText}>{successToast}</Text>
         </View>
       )}
+      {errorToast && (
+        <View style={[styles.toast, styles.toastError, { bottom: insets.bottom + spacing.xxl }]} pointerEvents="none">
+          <Text style={styles.toastText}>{errorToast}</Text>
+        </View>
+      )}
     </View>
   );
 }
@@ -1513,5 +1533,8 @@ const styles = StyleSheet.create({
     ...typography.metaStrong,
     color: colors.card,
     textAlign: 'center',
+  },
+  toastError: {
+    backgroundColor: colors.red,
   },
 });

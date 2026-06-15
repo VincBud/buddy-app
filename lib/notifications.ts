@@ -1,4 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getActiveUserId } from './auth';
+import { STORAGE_KEYS } from './storage-keys';
+
+// Scoped per authenticated user so two accounts on the same device
+// never see each other's local notifications.
+const getNotificationsStorageKey = (): string => {
+  const uid = getActiveUserId();
+  return uid ? `${STORAGE_KEYS.NOTIFICATIONS}_${uid}` : STORAGE_KEYS.NOTIFICATIONS;
+};
 
 export type NotificationType =
   | 'jobAccepted'
@@ -15,8 +24,6 @@ export type NotificationType =
   | 'message'
   | 'preferredBuddyJob';
 
-export const NOTIFICATIONS_STORAGE_KEY = 'notifications';
-export const NOTIFICATION_PREFERENCES_STORAGE_KEY = 'notification_preferences';
 
 export type NotificationPreferenceKey =
   | 'messages'
@@ -43,8 +50,12 @@ export interface Notification {
   createdAt: string;
   read: boolean;
   relatedJobId?: string;
+  actorId?: string;
+  payload?: Record<string, unknown>;
   userId?: string;
   relatedUserId?: string;
+  relatedEntityType?: string;
+  relatedEntityId?: string;
 }
 
 const sanitizeNotificationPreferences = (
@@ -86,7 +97,9 @@ export const createNotification = (
   message: string,
   relatedJobId?: string,
   userId?: string,
-  relatedUserId?: string
+  relatedUserId?: string,
+  relatedEntityType?: string,
+  relatedEntityId?: string
 ): Notification => {
   return {
     id: `${Date.now()}_${type}`,
@@ -98,6 +111,8 @@ export const createNotification = (
     relatedJobId,
     userId,
     relatedUserId,
+    relatedEntityType,
+    relatedEntityId,
   };
 };
 
@@ -150,6 +165,20 @@ const sanitizeNotification = (value: unknown): Notification | null => {
       candidate.relatedUserId === undefined
         ? undefined
         : String(candidate.relatedUserId),
+    actorId:
+      candidate.actorId === undefined ? undefined : String(candidate.actorId),
+    payload:
+      candidate.payload && typeof candidate.payload === 'object'
+        ? (candidate.payload as Record<string, unknown>)
+        : undefined,
+    relatedEntityType:
+      candidate.relatedEntityType === undefined
+        ? undefined
+        : String(candidate.relatedEntityType),
+    relatedEntityId:
+      candidate.relatedEntityId === undefined
+        ? undefined
+        : String(candidate.relatedEntityId),
   };
 };
 
@@ -179,7 +208,7 @@ export const parseNotifications = (raw: unknown): Notification[] => {
 };
 
 export const loadNotificationsFromStorage = async (): Promise<Notification[]> => {
-  const raw = await AsyncStorage.getItem(NOTIFICATIONS_STORAGE_KEY);
+  const raw = await AsyncStorage.getItem(getNotificationsStorageKey());
   try {
     return parseNotifications(raw);
   } catch {
@@ -188,7 +217,7 @@ export const loadNotificationsFromStorage = async (): Promise<Notification[]> =>
 };
 
 export const loadNotificationPreferences = async (): Promise<NotificationPreferences> => {
-  const raw = await AsyncStorage.getItem(NOTIFICATION_PREFERENCES_STORAGE_KEY);
+  const raw = await AsyncStorage.getItem(STORAGE_KEYS.NOTIFICATION_PREFERENCES);
 
   try {
     if (!raw) {
@@ -207,7 +236,7 @@ export const saveNotificationPreferences = async (
   const safePreferences = sanitizeNotificationPreferences(preferences);
 
   await AsyncStorage.setItem(
-    NOTIFICATION_PREFERENCES_STORAGE_KEY,
+    STORAGE_KEYS.NOTIFICATION_PREFERENCES,
     JSON.stringify(safePreferences)
   );
 };
@@ -260,7 +289,7 @@ export const saveNotificationsToStorage = async (
   );
 
   await AsyncStorage.setItem(
-    NOTIFICATIONS_STORAGE_KEY,
+    getNotificationsStorageKey(),
     JSON.stringify(safeNotifications)
   );
 };

@@ -1,7 +1,6 @@
-export const PLATFORM_FEE_RATE = 0.15;
-export const PLATFORM_FEE_MIN = 1;
-export const PLATFORM_FEE_MAX = 10;
+export const PLATFORM_FEE_FLAT = 1;
 export const MIN_JOB_BASE_PRICE = 10;
+export const MAX_JOB_BASE_PRICE = 500;
 
 export type PriceBreakdown = {
   basePrice: number;
@@ -13,6 +12,7 @@ export type PriceValidationResult = {
   parsedPrice: number | null;
   isValid: boolean;
   isBelowMinimum: boolean;
+  isAboveMaximum: boolean;
 };
 
 const roundCurrency = (value: number): number => {
@@ -78,7 +78,8 @@ export const parsePriceInput = (input: unknown): number | null => {
 
 export const validateJobBasePrice = (
   input: unknown,
-  minimum: number = MIN_JOB_BASE_PRICE
+  minimum: number = MIN_JOB_BASE_PRICE,
+  maximum: number = MAX_JOB_BASE_PRICE
 ): PriceValidationResult => {
   const parsedPrice = parsePriceInput(input);
 
@@ -87,26 +88,26 @@ export const validateJobBasePrice = (
       parsedPrice: null,
       isValid: false,
       isBelowMinimum: false,
+      isAboveMaximum: false,
     };
   }
 
   const isBelowMinimum = parsedPrice < minimum;
+  const isAboveMaximum = parsedPrice > maximum;
 
   return {
     parsedPrice,
-    isValid: !isBelowMinimum,
+    isValid: !isBelowMinimum && !isAboveMaximum,
     isBelowMinimum,
+    isAboveMaximum,
   };
 };
 
 export const calculatePlatformFee = (basePrice: number): number => {
-  if (!Number.isFinite(basePrice) || basePrice < 0) {
+  if (!Number.isFinite(basePrice) || basePrice <= 0) {
     return 0;
   }
-
-  const fee = basePrice * PLATFORM_FEE_RATE;
-  const clamped = Math.min(PLATFORM_FEE_MAX, Math.max(PLATFORM_FEE_MIN, fee));
-  return roundCurrency(clamped);
+  return PLATFORM_FEE_FLAT;
 };
 
 export const calculatePriceBreakdown = (basePrice: number): PriceBreakdown => {

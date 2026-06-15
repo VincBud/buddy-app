@@ -1,12 +1,6 @@
 import { ensureJobPaymentState, JobPaymentState } from './payments';
 import { calculatePriceBreakdown, parsePriceInput, PriceBreakdown } from './pricing';
 
-/**
- * Stable local user ID for the currently logged-in user.
- * Used to identify self-posted jobs before a real auth system is in place.
- */
-export const LOCAL_USER_ID = 'local_user';
-
 export type TimeMode = 'sofort' | 'flexibel' | 'termin';
 
 /**
@@ -55,6 +49,11 @@ export type JobCancellationSummary = {
   reason: string;
   note?: string;
   outcome?: 'cancelled';
+};
+
+export type JobCompletionConfirmation = {
+  ownerConfirmedAt?: string;  // ISO timestamp — set when owner confirms
+  buddyConfirmedAt?: string;  // ISO timestamp — set when buddy confirms
 };
 
 export type JobApplicationState = {
@@ -110,13 +109,41 @@ export const isActiveJobStatus = (status: JobStatus): boolean => {
 
 export const JOB_CATEGORIES = [
   'transport',
-  'handyman',
-  'household',
-  'tech',
+  'moving',
+  'relocation',
   'errands',
+  'tech',
+  'household',
+  'garden',
+  'furniture',
+  'petcare',
+  'events',
+  'photo',
+  'handyman',
+  'storage',
+  'delivery',
+  'other',
 ] as const;
 
 export type JobCategory = (typeof JOB_CATEGORIES)[number];
+
+export const CATEGORY_META: Record<JobCategory, { icon: string }> = {
+  transport:  { icon: 'car-outline' },
+  moving:     { icon: 'cube-outline' },
+  relocation: { icon: 'home-outline' },
+  errands:    { icon: 'bag-handle-outline' },
+  tech:       { icon: 'laptop-outline' },
+  household:  { icon: 'sparkles-outline' },
+  garden:     { icon: 'leaf-outline' },
+  furniture:  { icon: 'hammer-outline' },
+  petcare:    { icon: 'paw-outline' },
+  events:     { icon: 'calendar-outline' },
+  photo:      { icon: 'camera-outline' },
+  handyman:   { icon: 'construct-outline' },
+  storage:    { icon: 'archive-outline' },
+  delivery:   { icon: 'bicycle-outline' },
+  other:      { icon: 'ellipsis-horizontal-circle-outline' },
+};
 
 export type JobReview = {
   rating: 1 | 2 | 3 | 4 | 5;
@@ -135,6 +162,7 @@ export type JobRoleReview = JobReview & {
 export type Job = {
   id: string;
   requesterId?: string;
+  assignedBuddyId?: string;
   createdAt?: string;
   updatedAt?: string;
   expiresAt?: string;
@@ -147,6 +175,8 @@ export type Job = {
   subcategory?: string;
   problem: string;
   price: string;
+  priceType?: 'fixed' | 'negotiable';
+  priceAmount?: number;
   basePrice?: number;
   platformFee?: number;
   totalPrice?: number;
@@ -166,8 +196,20 @@ export type Job = {
   marketSignals?: JobMarketSignals;
   reviews?: JobRoleReview[];
   review?: JobReview;
+  disputeStatus?: 'none' | 'opened' | 'resolved';
+  disputeReason?: string;
+  disputeMessage?: string;
+  cancellationStatus?: 'none' | 'requested' | 'cancelled';
+  cancelledBy?: JobParticipantRole;
+  cancellationReason?: string;
+  cancellationMessage?: string;
+  ownerRatedBuddy?: boolean;
+  buddyRatedOwner?: boolean;
+  ownerRatingForBuddy?: number;
+  buddyRatingForOwner?: number;
   issueSummary?: JobIssueSummary;
   cancellationSummary?: JobCancellationSummary;
+  completionConfirmation?: JobCompletionConfirmation;
   rebooking?: JobRebooking;
   extensionsUsed?: number;
   maxExtensions?: number;
@@ -202,11 +244,17 @@ export const isChatAccessibleForJob = (
  * Use this on the non-owner (buddy) path to gate chat access.
  */
 export const isChatAccessibleForBuddy = (
-  job: Partial<Pick<Job, 'status' | 'match'>>,
+  job: Partial<Pick<Job, 'status' | 'match' | 'assignedBuddyId'>>,
   buddyId: string
 ): boolean => {
   if (!hasRequesterAcceptedMatch(job)) return false;
-  return job.match?.selectedApplicationId === buddyId;
+  // match.selectedApplicationId is set by local job-actions (owner device).
+  // assignedBuddyId is the cross-device signal: written by review_job_application
+  // RPC and carried in the jobs row — available to the buddy via Supabase.
+  return (
+    job.match?.selectedApplicationId === buddyId ||
+    job.assignedBuddyId === buddyId
+  );
 };
 
 /**
@@ -493,6 +541,18 @@ export const isJobResumable = (job: Pick<Job, 'status'>): boolean =>
 export const isJobRepostable = (job: Pick<Job, 'status'>): boolean =>
   job.status === 'expired' || job.status === 'cancelled' || job.status === 'completed';
 
+export const REPOST_WINDOW_HOURS = 48;
+
+// TODO: backend should enforce this eligibility window server-side
+export const canRepostJob = (job: Pick<Job, 'status' | 'expiresAt'>): boolean => {
+  if (!isJobRepostable(job)) return false;
+  if (job.status !== 'expired') return true;
+  if (!job.expiresAt) return true;
+  const expiredMs = Date.parse(job.expiresAt);
+  if (isNaN(expiredMs)) return true;
+  return Date.now() - expiredMs <= REPOST_WINDOW_HOURS * 60 * 60 * 1000;
+};
+
 /**
  * Returns jobs owned by the given user that are currently paused.
  */
@@ -500,13 +560,13 @@ export const getPausedOwnJobs = (jobs: Job[], currentUserId: string): Job[] =>
   jobs.filter((j) => j.requesterId === currentUserId && j.status === 'paused');
 
 /**
- * Returns old inactive own jobs eligible for reposting.
+ * Returns old inactive own jobs eligible for reposting within the allowed window.
  */
 export const getHistoricalOwnJobs = (jobs: Job[], currentUserId: string): Job[] =>
   jobs.filter(
     (j) =>
       j.requesterId === currentUserId &&
-      isJobRepostable(j)
+      canRepostJob(j)
   );
 
 /**

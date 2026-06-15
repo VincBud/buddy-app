@@ -1,0 +1,41 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --font-sans: ui-sans-serif, system-ui, -apple-system, "Segoe UI",
+      "Helvetica Neue", Arial, sans-serif;
+    color-scheme: light;
+  }
+
+  html,
+  body {
+    background-color: #FEFCFD;
+    color: #2A2D34;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: rgba(255, 64, 0, 0.18);
+    color: #2A2D34;
+  }
+
+  a {
+    text-underline-offset: 3px;
+  }
+}
+
+@layer components {
+  .container-narrow {
+    @apply mx-auto w-full max-w-5xl px-5 sm:px-8;
+  }
+  .container-wide {
+    @apply mx-auto w-full max-w-6xl px-5 sm:px-8;
+  }
+  .eyebrow {
+    @apply inline-flex items-center gap-2 rounded-full border border-mist bg-paper px-3 py-1 text-xs font-semibold uppercase tracking-[0.14em] text-smoke;
+  }
+}

@@ -1,5 +1,6 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Job, JOB_CATEGORIES, JobCategory, TimeMode } from './jobs';
+import { STORAGE_KEYS } from './storage-keys';
 
 export const AVAILABILITY_SLOTS = [
   'morning',
@@ -20,7 +21,7 @@ export type UserPreferences = {
   onboardingCompleted: boolean;
 };
 
-export const PREFERENCES_STORAGE_KEY = 'userPreferences';
+export const PREFERENCES_STORAGE_KEY = STORAGE_KEYS.USER_PREFERENCES;
 
 export const DEFAULT_USER_PREFERENCES: UserPreferences = {
   skills: [],
@@ -73,12 +74,19 @@ export const sanitizePreferences = (value: unknown): UserPreferences => {
   };
 };
 
-export const loadUserPreferences = async (): Promise<UserPreferences> => {
-  try {
-    const raw = await AsyncStorage.getItem(PREFERENCES_STORAGE_KEY);
-    if (!raw) return DEFAULT_USER_PREFERENCES;
+// Per-user scoped key; falls back to legacy global key for backward compatibility.
+const preferencesKey = (userId?: string): string =>
+  userId ? `${PREFERENCES_STORAGE_KEY}_${userId}` : PREFERENCES_STORAGE_KEY;
 
-    const parsed = JSON.parse(raw);
+export const loadUserPreferences = async (userId?: string): Promise<UserPreferences> => {
+  try {
+    const key = preferencesKey(userId);
+    const raw = await AsyncStorage.getItem(key);
+    // Backward-compat: if scoped key is empty, check the legacy global key
+    const effectiveRaw =
+      !raw && userId ? await AsyncStorage.getItem(PREFERENCES_STORAGE_KEY) : raw;
+    if (!effectiveRaw) return DEFAULT_USER_PREFERENCES;
+    const parsed = JSON.parse(effectiveRaw);
     return { ...DEFAULT_USER_PREFERENCES, ...sanitizePreferences(parsed) };
   } catch (error) {
     console.error('Error loading preferences:', error);
@@ -87,72 +95,30 @@ export const loadUserPreferences = async (): Promise<UserPreferences> => {
 };
 
 export const saveUserPreferences = async (
-  preferences: UserPreferences
+  preferences: UserPreferences,
+  userId?: string
 ): Promise<UserPreferences> => {
   const safe = sanitizePreferences(preferences);
-  await AsyncStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(safe));
+  await AsyncStorage.setItem(preferencesKey(userId), JSON.stringify(safe));
   return safe;
 };
 
 const CATEGORY_KEYWORDS: Record<JobCategory, string[]> = {
-  transport: [
-    'transport',
-    'fahrt',
-    'fahrdienst',
-    'abholen',
-    'liefern',
-    'delivery',
-    'uber',
-    'taxi',
-    'auto',
-  ],
-  tech: [
-    'tech',
-    'computer',
-    'pc',
-    'laptop',
-    'software',
-    'router',
-    'internet',
-    'wifi',
-    'phone',
-    'handy',
-  ],
-  household: [
-    'household',
-    'haushalt',
-    'clean',
-    'putzen',
-    'wäsche',
-    'laundry',
-    'küche',
-    'kitchen',
-    'wohnung',
-    'home',
-  ],
-  handyman: [
-    'handyman',
-    'werkzeug',
-    'repair',
-    'reparatur',
-    'bohren',
-    'montieren',
-    'bauen',
-    'furniture',
-    'möbel',
-    'install',
-  ],
-  errands: [
-    'errand',
-    'einkauf',
-    'besorgung',
-    'supermarkt',
-    'pharmacy',
-    'apotheke',
-    'paket',
-    'post',
-    'bank',
-  ],
+  transport: ['transport', 'fahrt', 'fahrdienst', 'taxi', 'auto', 'fahrer', 'mitfahrt', 'chauffeur'],
+  moving: ['möbel tragen', 'tragen', 'schleppen', 'sofa', 'schrank', 'schwer', 'last', 'heben'],
+  relocation: ['umzug', 'umziehen', 'einzug', 'auszug', 'karton', 'kiste', 'umzugshilfe'],
+  errands: ['einkauf', 'besorgung', 'supermarkt', 'apotheke', 'paket', 'post', 'bank', 'errand'],
+  tech: ['tech', 'computer', 'pc', 'laptop', 'software', 'router', 'internet', 'wifi', 'handy', 'setup'],
+  household: ['haushalt', 'putzen', 'reinigung', 'wäsche', 'küche', 'wohnung', 'sauber', 'clean'],
+  garden: ['garten', 'rasen', 'hecke', 'mähen', 'pflanzen', 'schneiden', 'terrasse', 'balkon', 'außen'],
+  furniture: ['möbel aufbauen', 'aufbauen', 'ikea', 'regal', 'bett aufbauen', 'schrank aufbauen', 'aufbau'],
+  petcare: ['hund', 'katze', 'tier', 'haustier', 'gassi', 'füttern', 'tierpflege', 'pet'],
+  events: ['event', 'gastronomie', 'gastro', 'feier', 'party', 'veranstaltung', 'kellner', 'catering', 'service'],
+  photo: ['foto', 'photo', 'social media', 'instagram', 'content', 'video', 'shooting', 'kamera', 'reels'],
+  handyman: ['handyman', 'reparatur', 'repair', 'bohren', 'montieren', 'bauen', 'werkzeug', 'install', 'schrauben'],
+  storage: ['lager', 'lagern', 'stapeln', 'keller', 'dachboden', 'einlagern', 'sortieren'],
+  delivery: ['lieferung', 'liefern', 'abholen', 'abholung', 'kurierfahrt', 'auslieferung', 'bringen'],
+  other: ['sonstige', 'andere', 'sonstiges', 'anderes', 'verschiedenes'],
 };
 
 export const inferJobCategory = (job: Job): JobCategory => {

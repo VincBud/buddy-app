@@ -1,12 +1,13 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { STORAGE_KEYS } from './storage-keys';
 
 export type UserProfile = {
   bio: string;
   profileImageUri: string | null;
 };
 
-const USER_PROFILE_STORAGE_KEY = 'userProfile';
-const LEGACY_PROFILE_IMAGE_STORAGE_KEY = 'profileImageUri';
+const USER_PROFILE_STORAGE_KEY = STORAGE_KEYS.USER_PROFILE;
+const LEGACY_PROFILE_IMAGE_STORAGE_KEY = STORAGE_KEYS.PROFILE_IMAGE_URI;
 
 const DEFAULT_USER_PROFILE: UserProfile = {
   bio: '',

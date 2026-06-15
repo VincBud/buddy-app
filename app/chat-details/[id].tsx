@@ -1,4 +1,3 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import {
@@ -14,6 +13,7 @@ import {
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../lib/colors';
+import { debugLog } from '../../lib/config/debug';
 import i18n, { useLanguage } from '../../lib/i18n';
 import {
     cancelJob,
@@ -24,6 +24,7 @@ import {
     resolveJobIssue,
 } from '../../lib/job-actions';
 import { addNotification } from '../../services/notifications.service';
+import { loadJobs } from '../../services/jobs.service';
 import { Job, JobParticipantRole, JobStatus } from '../../lib/jobs';
 import { goBackOrReplace } from '../../lib/navigation';
 import { ensureJobPaymentState, formatPriceLine } from '../../lib/payments';
@@ -38,6 +39,7 @@ type JobWithDescription = Job & {
 type ChatDetailsRouteParams = {
   id?: string | string[];
   currentUserRole?: JobParticipantRole | string | string[];
+  fromChat?: string;
 };
 
 const REPORT_REASON_KEYS: ReportIssueReasonKey[] = [
@@ -66,6 +68,54 @@ const normalizeRoleParam = (value: unknown): JobParticipantRole => {
   }
   return value === 'auftraggeber' ? 'auftraggeber' : 'buddy';
 };
+
+// Small component so each file thumbnail can track its own load error with useState.
+const FilePreviewImage = ({ uri }: { uri: string }) => {
+  const [failed, setFailed] = useState(false);
+  if (failed) {
+    return (
+      <View style={filePreviewStyles.broken}>
+        <Text style={filePreviewStyles.brokenText}>–</Text>
+      </View>
+    );
+  }
+  return (
+    <Image
+      source={{ uri }}
+      style={filePreviewStyles.img}
+      onLoad={() => debugLog(`[chatDetails] file loaded uri=${uri.slice(-80)}`)}
+      onError={(e) => {
+        console.warn(`[chatDetails] file error uri=${uri.slice(-80)} err=${JSON.stringify(e.nativeEvent)}`);
+        setFailed(true);
+      }}
+    />
+  );
+};
+
+const filePreviewStyles = StyleSheet.create({
+  img: {
+    width: 98,
+    height: 98,
+    borderRadius: layout.borderRadiusSmall,
+    backgroundColor: colors.veryLightGrey,
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
+  },
+  broken: {
+    width: 98,
+    height: 98,
+    borderRadius: layout.borderRadiusSmall,
+    backgroundColor: colors.veryLightGrey,
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  brokenText: {
+    fontSize: 22,
+    color: colors.placeholder,
+  },
+});
 
 export default function ChatDetailsScreen() {
   useLanguage();
@@ -101,9 +151,7 @@ export default function ChatDetailsScreen() {
 
       const load = async () => {
         try {
-          const jobsRaw = await AsyncStorage.getItem('jobs');
-          const parsed = jobsRaw ? JSON.parse(jobsRaw) : [];
-          const safeJobs: JobWithDescription[] = Array.isArray(parsed) ? parsed : [];
+          const safeJobs: JobWithDescription[] = await loadJobs() as JobWithDescription[];
           const found = safeJobs.find((item) => String(item.id) === String(jobId)) || null;
 
           if (isActive) {
@@ -137,7 +185,7 @@ export default function ChatDetailsScreen() {
     job?.problem ||
     i18n.t('common.job_not_found_text');
 
-  const files = Array.isArray(job?.media) ? job.media : [];
+  const files = Array.isArray(job?.media) ? job.media.filter((uri) => String(uri).startsWith('http')) : [];
   const payment = ensureJobPaymentState(job ?? {});
   const reviewCount = Array.isArray(job?.creatorReviews) ? job.creatorReviews.length : 0;
   const averageRating =
@@ -154,6 +202,7 @@ export default function ChatDetailsScreen() {
   const jobStatus: JobStatus = job?.status ?? 'open';
   const isCancelled = jobStatus === 'cancelled';
   const isIssueReported = jobStatus === 'issue_reported';
+  const isEnglish = String(i18n.locale).toLowerCase().startsWith('en');
 
   const clearReportForm = () => {
     setReportReason(null);
@@ -339,7 +388,7 @@ export default function ChatDetailsScreen() {
         ]}
         showsVerticalScrollIndicator={false}
       >
-        {statusInfo && (
+        {statusInfo ? (
           <View style={[styles.statusCard, statusInfo.variant === 'issue' && styles.statusCardIssue]}>
             <Text style={[styles.statusTitle, statusInfo.variant === 'issue' && styles.statusTitleIssue]}>
               {statusInfo.title}
@@ -350,6 +399,15 @@ export default function ChatDetailsScreen() {
                 {i18n.t(`chat.report_reason_${job.issueSummary.reason}`)}
               </Text>
             )}
+          </View>
+        ) : (jobStatus === 'active' || jobStatus === 'matched') && (
+          <View style={styles.runningStatusChip}>
+            <Text style={styles.runningStatusDot}>●</Text>
+            <Text style={styles.runningStatusText}>
+              {jobStatus === 'active'
+                ? i18n.t('chat.status_label_active', { defaultValue: isEnglish ? 'In Progress' : 'In Arbeit' })
+                : i18n.t('chat.status_label_matched', { defaultValue: isEnglish ? 'Confirmed' : 'Bestätigt' })}
+            </Text>
           </View>
         )}
 
@@ -439,22 +497,32 @@ export default function ChatDetailsScreen() {
         </View>
 
         <View style={styles.card}>
-          <Text style={styles.sectionTitle}>{i18n.t('chat.details_section_payment')}</Text>
-
-          <View style={styles.paymentRow}>
-            <Text style={styles.paymentLabel}>{i18n.t('chat.payment_line_job')}</Text>
-            <Text style={styles.paymentValue}>{formatPriceLine(payment.buddyEarnings)}</Text>
-          </View>
-
-          <View style={styles.paymentRow}>
-            <Text style={styles.paymentLabel}>{i18n.t('chat.payment_line_fee')}</Text>
-            <Text style={styles.paymentValue}>{formatPriceLine(payment.platformKeeps)}</Text>
-          </View>
-
-          <View style={[styles.paymentRow, styles.paymentTotalRow]}>
-            <Text style={styles.paymentTotalLabel}>{i18n.t('chat.payment_line_total')}</Text>
-            <Text style={styles.paymentTotalValue}>{formatPriceLine(payment.requesterPays)}</Text>
-          </View>
+          {currentUserRole === 'buddy' ? (
+            <>
+              <Text style={styles.sectionTitle}>{i18n.t('chat.detail_section_payout')}</Text>
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>{i18n.t('chat.payout_line_buddy')}</Text>
+                <Text style={styles.paymentValue}>{formatPriceLine(payment.buddyEarnings)}</Text>
+              </View>
+              <Text style={styles.payoutHintText}>{i18n.t('chat.payout_hint_buddy')}</Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.sectionTitle}>{i18n.t('chat.details_section_payment')}</Text>
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>{i18n.t('chat.payment_line_job')}</Text>
+                <Text style={styles.paymentValue}>{formatPriceLine(payment.buddyEarnings)}</Text>
+              </View>
+              <View style={styles.paymentRow}>
+                <Text style={styles.paymentLabel}>{i18n.t('chat.payment_line_fee')}</Text>
+                <Text style={styles.paymentValue}>{formatPriceLine(payment.platformKeeps)}</Text>
+              </View>
+              <View style={[styles.paymentRow, styles.paymentTotalRow]}>
+                <Text style={styles.paymentTotalLabel}>{i18n.t('chat.payment_line_total')}</Text>
+                <Text style={styles.paymentTotalValue}>{formatPriceLine(payment.requesterPays)}</Text>
+              </View>
+            </>
+          )}
         </View>
 
         <View style={styles.card}>
@@ -470,11 +538,7 @@ export default function ChatDetailsScreen() {
           {files.length > 0 ? (
             <View style={styles.filesGrid}>
               {files.map((uri, index) => (
-                <Image
-                  key={`${uri}-${index}`}
-                  source={{ uri }}
-                  style={styles.filePreview}
-                />
+                <FilePreviewImage key={`${uri}-${index}`} uri={uri} />
               ))}
             </View>
           ) : (
@@ -483,31 +547,40 @@ export default function ChatDetailsScreen() {
         </View>
 
         <View style={styles.actionSectionCard}>
-          <Pressable
-            style={({ pressed }) => [
-              styles.primaryActionButton,
-              isCancelled && styles.actionButtonDisabled,
-              pressed && !isCancelled && styles.actionButtonPressed,
-            ]}
-            onPress={handleCancelJob}
-            disabled={isCancelled}
-            hitSlop={6}
-          >
-            <Text style={styles.secondaryActionText}>{i18n.t('chat.cancel_job')}</Text>
-          </Pressable>
-
-          <Pressable
-            style={({ pressed }) => [
-              styles.secondaryActionButton,
-              (isCancelled || isIssueReported) && styles.actionButtonDisabled,
-              pressed && !(isCancelled || isIssueReported) && styles.actionButtonPressed,
-            ]}
-            onPress={handleReportIssue}
-            disabled={isCancelled || isIssueReported}
-            hitSlop={6}
-          >
-            <Text style={styles.tertiaryActionText}>{i18n.t('chat.report_issue')}</Text>
-          </Pressable>
+          {!isCancelled && job && params.fromChat !== 'true' && (
+            <Pressable
+              style={({ pressed }) => [styles.openChatButton, pressed && styles.actionButtonPressed]}
+              onPress={() => router.push({ pathname: '/chat', params: { jobId: job.id, problem: job.problem || '', price: job.price || '', creatorName: job.creatorName || '' } })}
+            >
+              <Text style={styles.openChatButtonText}>{i18n.t('chat.open_chat', { defaultValue: isEnglish ? 'Open Chat' : 'Chat öffnen' })}</Text>
+            </Pressable>
+          )}
+          <View style={styles.destructiveActionsRow}>
+            <Pressable
+              style={({ pressed }) => [
+                styles.cancelActionButton,
+                isCancelled && styles.actionButtonDisabled,
+                pressed && !isCancelled && styles.actionButtonPressed,
+              ]}
+              onPress={handleCancelJob}
+              disabled={isCancelled}
+              hitSlop={6}
+            >
+              <Text style={styles.cancelActionText}>{i18n.t('chat.cancel_job')}</Text>
+            </Pressable>
+            <Pressable
+              style={({ pressed }) => [
+                styles.reportActionButton,
+                (isCancelled || isIssueReported) && styles.actionButtonDisabled,
+                pressed && !(isCancelled || isIssueReported) && styles.actionButtonPressed,
+              ]}
+              onPress={handleReportIssue}
+              disabled={isCancelled || isIssueReported}
+              hitSlop={6}
+            >
+              <Text style={styles.reportActionText}>{i18n.t('chat.report_issue')}</Text>
+            </Pressable>
+          </View>
         </View>
       </ScrollView>
 
@@ -1026,6 +1099,12 @@ const styles = StyleSheet.create({
     ...typography.meta,
     color: colors.textSecondary,
   },
+  payoutHintText: {
+    ...typography.meta,
+    color: colors.textSecondary,
+    marginTop: 6,
+    lineHeight: 17,
+  },
   paymentValue: {
     ...typography.metaStrong,
     color: colors.textPrimary,
@@ -1059,14 +1138,6 @@ const styles = StyleSheet.create({
     color: colors.secondary,
     lineHeight: 16,
   },
-  filePreview: {
-    width: 98,
-    height: 98,
-    borderRadius: layout.borderRadiusSmall,
-    backgroundColor: colors.veryLightGrey,
-    borderWidth: 1,
-    borderColor: colors.lightBorder,
-  },
   emptyFilesText: {
     ...typography.meta,
     color: colors.textSecondary,
@@ -1077,7 +1148,68 @@ const styles = StyleSheet.create({
     borderRadius: layout.borderRadiusMedium,
     borderWidth: 0,
     padding: 0,
+    gap: spacing.sm,
+  },
+  runningStatusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
     gap: spacing.xs,
+    alignSelf: 'flex-start',
+    backgroundColor: colors.lightGreen,
+    borderWidth: 1,
+    borderColor: '#C6F0CC',
+    borderRadius: 999,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  runningStatusDot: {
+    fontSize: 10,
+    color: colors.green,
+    lineHeight: 14,
+  },
+  runningStatusText: {
+    ...typography.metaStrong,
+    color: colors.green,
+  },
+  openChatButton: {
+    backgroundColor: colors.alternateGreen,
+    borderRadius: layout.borderRadiusSmall,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  openChatButtonText: {
+    ...typography.buttonSecondary,
+    color: colors.card,
+  },
+  destructiveActionsRow: {
+    flexDirection: 'row',
+    gap: spacing.xs,
+    flexWrap: 'wrap',
+  },
+  cancelActionButton: {
+    borderRadius: layout.borderRadiusSmall,
+    borderWidth: 1,
+    borderColor: 'rgba(239, 68, 68, 0.25)',
+    backgroundColor: 'rgba(239, 68, 68, 0.06)',
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  cancelActionText: {
+    ...typography.metaStrong,
+    color: colors.red,
+  },
+  reportActionButton: {
+    borderRadius: layout.borderRadiusSmall,
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
+    backgroundColor: colors.card,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  reportActionText: {
+    ...typography.meta,
+    color: colors.textSecondary,
   },
   primaryActionButton: {
     alignSelf: 'flex-start',

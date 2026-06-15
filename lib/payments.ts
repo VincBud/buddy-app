@@ -169,14 +169,19 @@ export const applyPaymentStateForJobStatus = (
 ): JobPaymentState => {
   const now = nowIso();
 
-  // Job re-opened, still open, or paused — no payment action yet
-  if (nextStatus === 'open' || nextStatus === 'paused') {
+  // Job re-opened — no buddy matched yet, reset payment to initial state
+  if (nextStatus === 'open') {
     return {
       ...payment,
       paymentStatus: 'none',
       payoutStatus: 'not_ready',
       updatedAt: now,
     };
+  }
+
+  // Job paused — preserve existing payment/payout reservation so buddy earnings are not lost
+  if (nextStatus === 'paused') {
+    return { ...payment, updatedAt: now };
   }
 
   // Owner accepted one buddy → request authorization; buddy earnings are reserved

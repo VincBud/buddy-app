@@ -3,5 +3,23 @@
     "source.fixAll": "explicit",
     "source.organizeImports": "explicit",
     "source.sortMembers": "explicit"
-  }
+  },
+  "files.associations": {
+    "**/node_modules/**/tsconfig*.json": "json"
+  },
+  "files.watcherExclude": {
+    "**/node_modules/**": true
+  },
+  "search.exclude": {
+    "**/node_modules": true
+  },
+  "json.schemas": [
+    {
+      "fileMatch": [
+        "**/node_modules/**/tsconfig.json",
+        "**/node_modules/**/tsconfig.*.json"
+      ],
+      "schema": { "type": "object" }
+    }
+  ]
 }

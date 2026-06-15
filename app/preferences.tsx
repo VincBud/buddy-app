@@ -1,7 +1,8 @@
 import Slider from '@react-native-community/slider';
+import * as ImagePicker from 'expo-image-picker';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useMemo, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
+import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../lib/colors';
 import i18n, { useLanguage } from '../lib/i18n';
@@ -17,6 +18,9 @@ import {
     UserPreferences,
 } from '../lib/preferences';
 import { loadCurrentUser, patchCurrentUser } from '../lib/current-user';
+import { getActiveUserId } from '../lib/auth';
+import { updateProfile } from '../services/profiles.service';
+import { resetHomeHintsCounter } from './(tabs)/index';
 import { layout, spacing } from '../lib/spacing';
 import { typography } from '../lib/typography';
 import { loadUserProfile, updateUserProfile } from '../lib/user-profile';
@@ -25,14 +29,17 @@ type PreferencesMode = 'onboarding' | 'settings';
 
 export default function PreferencesScreen() {
   const bioCharacterLimit = 150;
-  useLanguage();
+  const language = useLanguage();
   const insets = useSafeAreaInsets();
   const params = useLocalSearchParams<{ mode?: string }>();
   const [prefs, setPrefs] = useState<UserPreferences>(DEFAULT_USER_PREFERENCES);
   const [bio, setBio] = useState('');
   const [displayName, setDisplayName] = useState('');
+  const [profileImageUri, setProfileImageUri] = useState<string | null>(null);
   const [referralSource, setReferralSource] = useState('');
   const [isSaving, setIsSaving] = useState(false);
+  const [dataLoaded, setDataLoaded] = useState(false);
+  const [showSkillsError, setShowSkillsError] = useState(false);
 
   const requestedMode: PreferencesMode | null =
     params.mode === 'settings' || params.mode === 'onboarding'
@@ -49,14 +56,16 @@ export default function PreferencesScreen() {
   useEffect(() => {
     const load = async () => {
       const [loaded, userProfile, currentUser] = await Promise.all([
-        loadUserPreferences(),
+        loadUserPreferences(getActiveUserId() || undefined),
         loadUserProfile(),
         loadCurrentUser(),
       ]);
       setPrefs(loaded);
       setBio(userProfile.bio);
+      setProfileImageUri(userProfile.profileImageUri);
       setDisplayName(currentUser.displayName);
       setReferralSource(currentUser.referralSource ?? '');
+      setDataLoaded(true);
     };
     load();
   }, []);
@@ -93,13 +102,31 @@ export default function PreferencesScreen() {
     goBackOrReplace(router, '/(tabs)/profile');
   };
 
+  const pickProfileImage = async () => {
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) return;
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ['images'] as ImagePicker.MediaType[],
+      allowsEditing: true,
+      aspect: [1, 1] as [number, number],
+      quality: 0.8,
+    });
+    if (!result.canceled && result.assets?.[0]?.uri) {
+      setProfileImageUri(result.assets[0].uri);
+    }
+  };
+
   const save = async () => {
+    if (isOnboardingMode && prefs.skills.length < 3) {
+      setShowSkillsError(true);
+      return;
+    }
     setIsSaving(true);
     try {
       const toSave: UserPreferences = { ...prefs, onboardingCompleted: true };
       await Promise.all([
-        saveUserPreferences(toSave),
-        updateUserProfile({ bio }),
+        saveUserPreferences(toSave, getActiveUserId() || undefined),
+        updateUserProfile({ bio, profileImageUri }),
         patchCurrentUser({
           displayName: displayName.trim(),
           bio: bio.trim() || undefined,
@@ -110,7 +137,19 @@ export default function PreferencesScreen() {
           onboardingCompleted: true,
         }),
       ]);
+      // Sync to Supabase profiles table — non-blocking, local state is source of truth
+      // avatar_url stores local device URI for now; Supabase Storage upload is a future step
+      updateProfile({
+        username: displayName.trim() || undefined,
+        avatar_url: profileImageUri ?? null,
+        bio: bio.trim() || null,
+        skills: prefs.skills.length > 0 ? prefs.skills : null,
+        radius_km: prefs.radius ?? null,
+        discovery_source: referralSource.trim() || null,
+      }).catch(() => {/* non-fatal */});
+
       if (isOnboardingMode) {
+        await resetHomeHintsCounter();
         router.replace('/(tabs)');
       } else {
         handleBack();
@@ -122,6 +161,14 @@ export default function PreferencesScreen() {
     }
   };
 
+  const completenessPercent = useMemo(() => {
+    let pct = 20; // radius always has a value
+    if (displayName.trim().length > 0) pct += 30;
+    if (prefs.skills.length > 0) pct += 30;
+    if (bio.trim().length > 0) pct += 20;
+    return pct;
+  }, [displayName, prefs.skills, bio]);
+
   const categoryLabel = useMemo(
     () =>
       Object.fromEntries(
@@ -130,7 +177,7 @@ export default function PreferencesScreen() {
           i18n.t(`preferences.categories.${category}`),
         ])
       ) as Record<JobCategory, string>,
-    []
+    [language]
   );
 
   const availabilityLabel = useMemo(
@@ -138,7 +185,7 @@ export default function PreferencesScreen() {
       Object.fromEntries(
         AVAILABILITY_SLOTS.map((slot) => [slot, i18n.t(`preferences.availability.${slot}`)])
       ) as Record<AvailabilitySlot, string>,
-    []
+    [language]
   );
 
   return (
@@ -166,6 +213,18 @@ export default function PreferencesScreen() {
         contentContainerStyle={styles.content}
         showsVerticalScrollIndicator={false}
       >
+        {isOnboardingMode && (
+          <View style={styles.completenessCard}>
+            <View style={styles.completenessRow}>
+              <Text style={styles.completenessLabel}>Profil vollständig</Text>
+              <Text style={styles.completenessPercent}>{completenessPercent}%</Text>
+            </View>
+            <View style={styles.completenessTrack}>
+              <View style={[styles.completenessBar, { width: `${completenessPercent}%` as any }]} />
+            </View>
+          </View>
+        )}
+
         <View style={styles.card}>
           <Text style={styles.sectionTitle}>{i18n.t('preferences.name_title')}</Text>
           <Text style={styles.sectionHint}>{i18n.t('preferences.name_hint')}</Text>
@@ -178,6 +237,31 @@ export default function PreferencesScreen() {
             autoCapitalize="words"
             returnKeyType="done"
           />
+          {dataLoaded && displayName.trim().length === 0 && (
+            <Text style={styles.fieldError}>{i18n.t('preferences.name_required')}</Text>
+          )}
+          {isOnboardingMode && (
+            <Pressable style={styles.avatarRow} onPress={pickProfileImage}>
+              <View style={styles.avatarSmall}>
+                {profileImageUri ? (
+                  <Image source={{ uri: profileImageUri }} style={styles.avatarSmallImage} />
+                ) : (
+                  <Text style={styles.avatarSmallPlus}>+</Text>
+                )}
+              </View>
+              <View>
+                <Text style={styles.avatarRowLabel}>{i18n.t('preferences.profile_image_cta')}</Text>
+                <Text style={styles.avatarRowHint}>{i18n.t('preferences.profile_image_trust_hint')}</Text>
+              </View>
+            </Pressable>
+          )}
+          {isOnboardingMode && (
+            <View style={styles.ratingRow}>
+              <Text style={styles.ratingStars}>★</Text>
+              <Text style={styles.ratingScore}>5.0</Text>
+              <Text style={styles.ratingNew}>· Noch keine Bewertungen</Text>
+            </View>
+          )}
         </View>
 
         <View style={styles.card}>
@@ -192,7 +276,10 @@ export default function PreferencesScreen() {
                 <Pressable
                   key={`skill-${category}`}
                   style={[styles.chip, selected && styles.chipActive]}
-                  onPress={() => toggleCategory('skills', category)}
+                  onPress={() => {
+                    toggleCategory('skills', category);
+                    if (showSkillsError) setShowSkillsError(false);
+                  }}
                 >
                   <Text style={[styles.chipText, selected && styles.chipTextActive]}>
                     {categoryLabel[category]}
@@ -201,53 +288,58 @@ export default function PreferencesScreen() {
               );
             })}
           </View>
+          {isOnboardingMode && (
+            <Text style={[styles.skillsCounter, showSkillsError && prefs.skills.length < 3 && styles.skillsCounterError]}>
+              {prefs.skills.length < 3
+                ? `${prefs.skills.length} von 3 ausgewählt – bitte noch ${3 - prefs.skills.length} mehr wählen`
+                : `${prefs.skills.length} Stärken ausgewählt ✓`}
+            </Text>
+          )}
         </View>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>{i18n.t('preferences.preferred_title')}</Text>
-          {isOnboardingMode && (
-            <Text style={styles.sectionHint}>{i18n.t('preferences.preferred_hint')}</Text>
-          )}
-          <View style={styles.chipsWrap}>
-            {JOB_CATEGORIES.map((category) => {
-              const selected = prefs.preferredCategories.includes(category);
-              return (
-                <Pressable
-                  key={`preferred-${category}`}
-                  style={[styles.chip, selected && styles.chipActive]}
-                  onPress={() => toggleCategory('preferredCategories', category)}
-                >
-                  <Text style={[styles.chipText, selected && styles.chipTextActive]}>
-                    {categoryLabel[category]}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
+        {!isOnboardingMode && (
+          <>
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>{i18n.t('preferences.preferred_title')}</Text>
+              <View style={styles.chipsWrap}>
+                {JOB_CATEGORIES.map((category) => {
+                  const selected = prefs.preferredCategories.includes(category);
+                  return (
+                    <Pressable
+                      key={`preferred-${category}`}
+                      style={[styles.chip, selected && styles.chipActive]}
+                      onPress={() => toggleCategory('preferredCategories', category)}
+                    >
+                      <Text style={[styles.chipText, selected && styles.chipTextActive]}>
+                        {categoryLabel[category]}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
 
-        <View style={styles.card}>
-          <Text style={styles.sectionTitle}>{i18n.t('preferences.excluded_title')}</Text>
-          {isOnboardingMode && (
-            <Text style={styles.sectionHint}>{i18n.t('preferences.excluded_hint')}</Text>
-          )}
-          <View style={styles.chipsWrap}>
-            {JOB_CATEGORIES.map((category) => {
-              const selected = prefs.excludedCategories.includes(category);
-              return (
-                <Pressable
-                  key={`excluded-${category}`}
-                  style={[styles.chip, styles.chipMuted, selected && styles.chipDanger]}
-                  onPress={() => toggleCategory('excludedCategories', category)}
-                >
-                  <Text style={[styles.chipText, styles.chipMutedText, selected && styles.chipDangerText]}>
-                    {categoryLabel[category]}
-                  </Text>
-                </Pressable>
-              );
-            })}
-          </View>
-        </View>
+            <View style={styles.card}>
+              <Text style={styles.sectionTitle}>{i18n.t('preferences.excluded_title')}</Text>
+              <View style={styles.chipsWrap}>
+                {JOB_CATEGORIES.map((category) => {
+                  const selected = prefs.excludedCategories.includes(category);
+                  return (
+                    <Pressable
+                      key={`excluded-${category}`}
+                      style={[styles.chip, styles.chipMuted, selected && styles.chipDanger]}
+                      onPress={() => toggleCategory('excludedCategories', category)}
+                    >
+                      <Text style={[styles.chipText, styles.chipMutedText, selected && styles.chipDangerText]}>
+                        {categoryLabel[category]}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          </>
+        )}
 
         {!isOnboardingMode && (
           <View style={styles.card}>
@@ -326,7 +418,11 @@ export default function PreferencesScreen() {
       </ScrollView>
 
       <View style={[styles.footer, { paddingBottom: insets.bottom + spacing.md }]}> 
-        <Pressable style={styles.saveButton} onPress={save} disabled={isSaving}>
+        <Pressable
+          style={[styles.saveButton, (isSaving || (dataLoaded && displayName.trim().length === 0)) && styles.saveButtonDisabled]}
+          onPress={save}
+          disabled={isSaving || (dataLoaded && displayName.trim().length === 0)}
+        >
           <Text style={styles.saveButtonText}>
             {isSaving
               ? i18n.t('preferences.saving')
@@ -411,13 +507,24 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   chip: {
-    backgroundColor: colors.lightGrey,
+    backgroundColor: colors.card,
     borderRadius: 999,
     paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
   },
   chipActive: {
     backgroundColor: colors.secondary,
+    borderColor: colors.secondary,
+  },
+  skillsCounter: {
+    ...typography.meta,
+    color: colors.textSecondary,
+    marginTop: spacing.sm,
+  },
+  skillsCounterError: {
+    color: colors.red,
   },
   chipMuted: {
     backgroundColor: colors.lightGrey,
@@ -467,6 +574,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     ...typography.body,
+    letterSpacing: 0,
     color: colors.textPrimary,
     backgroundColor: colors.veryLightGrey,
   },
@@ -483,8 +591,111 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.lg,
     alignItems: 'center',
   },
+  saveButtonDisabled: {
+    opacity: 0.45,
+  },
   saveButtonText: {
     ...typography.button,
     color: colors.card,
+  },
+  fieldError: {
+    ...typography.meta,
+    color: colors.red,
+    marginTop: spacing.sm,
+  },
+  avatarRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.md,
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.veryLightGrey2,
+  },
+  avatarRowLabel: {
+    ...typography.metaStrong,
+    color: colors.textSecondary,
+  },
+  avatarRowHint: {
+    ...typography.meta,
+    color: colors.placeholder,
+    marginTop: 2,
+  },
+  avatarSmall: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: colors.veryLightGrey,
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+    flexShrink: 0,
+  },
+  avatarSmallImage: {
+    width: '100%',
+    height: '100%',
+  },
+  avatarSmallPlus: {
+    fontSize: 20,
+    color: colors.placeholder,
+    lineHeight: 24,
+  },
+  completenessCard: {
+    backgroundColor: colors.card,
+    borderRadius: layout.borderRadiusMedium,
+    padding: layout.cardPadding,
+    shadowColor: '#000',
+    shadowOpacity: 0.04,
+    shadowRadius: 6,
+    shadowOffset: { width: 0, height: 2 },
+    elevation: 1,
+  },
+  completenessRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.sm,
+  },
+  completenessLabel: {
+    ...typography.meta,
+    color: colors.textSecondary,
+  },
+  completenessPercent: {
+    ...typography.metaStrong,
+    color: colors.secondary,
+  },
+  completenessTrack: {
+    height: 5,
+    borderRadius: 999,
+    backgroundColor: colors.veryLightGrey,
+    overflow: 'hidden',
+  },
+  completenessBar: {
+    height: '100%',
+    borderRadius: 999,
+    backgroundColor: colors.secondary,
+  },
+  ratingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.xs,
+    marginTop: spacing.md,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.veryLightGrey2,
+  },
+  ratingStars: {
+    ...typography.metaStrong,
+    color: '#F59E0B',
+  },
+  ratingScore: {
+    ...typography.metaStrong,
+    color: colors.textPrimary,
+  },
+  ratingNew: {
+    ...typography.meta,
+    color: colors.textSecondary,
   },
 });

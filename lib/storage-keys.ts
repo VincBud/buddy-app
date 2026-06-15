@@ -32,8 +32,8 @@ export const STORAGE_KEYS = {
   // Current user model — keyed per userId: `${key}_${userId}`
   CURRENT_USER: 'currentUser',
 
-  // DEV ONLY — local user switcher
-  DEV_ACTIVE_USER: 'dev_active_user',
+  // App settings
+  APP_LANGUAGE: 'appLanguage',
 } as const;
 
 export type StorageKey = (typeof STORAGE_KEYS)[keyof typeof STORAGE_KEYS];

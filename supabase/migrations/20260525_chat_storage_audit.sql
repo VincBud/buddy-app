@@ -1,0 +1,27 @@
+-- Storage policy audit: chat bucket (2026-05-25)
+--
+-- Bucket: chat (public read — URLs serve images directly; acceptable per Slack/WhatsApp model)
+-- File size limit: 10 MB. MIME types restricted to image/*.
+--
+-- INSERT policy (chat_images_insert_own):
+--   WITH CHECK auth.uid()::text = (storage.foldername(name))[2]
+--   ✓ Authenticated only. Path segment [2] must equal caller uid. No public write.
+--
+-- UPDATE policy (chat_images_update_own):
+--   USING auth.uid()::text = (storage.foldername(name))[2]
+--   ✓ Own files only.
+--
+-- DELETE policy (chat_images_delete_own):
+--   USING auth.uid()::text = (storage.foldername(name))[2]
+--   ✓ Own files only.
+--
+-- uploadChatImage in media.service.ts sets upsert: false — prevents overwrite.
+--
+-- No unsafe write policies found. No changes required.
+--
+-- Remaining risk: bucket is public-read. Anyone with a URL can fetch an image.
+-- Mitigation: image URLs are only distributed via public.messages rows, which
+-- are RLS-protected (participants only). If private media is needed later,
+-- convert bucket to private and use signed URLs via storage.createSignedUrl().
+
+-- intentionally empty — audit only

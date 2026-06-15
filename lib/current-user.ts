@@ -3,17 +3,10 @@
  *
  * All screens read/write the active user through this module.
  * Never access user AsyncStorage keys directly from screens.
- *
- * Dev/local:   userId  = getActiveDevUserId()  (from dev-session.ts)
- *              storage = AsyncStorage keyed per userId
- *
- * Production:  replace getActiveDevUserId() with supabase.auth.getUser().id
- *              replace AsyncStorage reads with Supabase profile table queries
- *              — only this file changes, callers stay the same
  */
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useCallback, useEffect, useState } from 'react';
-import { getActiveDevUser, getActiveDevUserId } from './dev-session';
+import { getActiveUserId } from './auth';
 import { STORAGE_KEYS } from './storage-keys';
 import { BuddyUser, sanitizeBuddyUser } from './user-model';
 
@@ -22,30 +15,20 @@ const userKey = (userId: string) => `${STORAGE_KEYS.CURRENT_USER}_${userId}`;
 
 /**
  * Loads the current user's BuddyUser from storage.
- * Falls back to dev-user name and sensible defaults when no data exists yet.
  */
 export const loadCurrentUser = async (): Promise<BuddyUser> => {
-  const userId = getActiveDevUserId();
+  const userId = getActiveUserId();
   try {
     const raw = await AsyncStorage.getItem(userKey(userId));
     const parsed = raw ? JSON.parse(raw) : {};
-    const user = sanitizeBuddyUser(parsed, userId);
-
-    // Seed displayName from dev-session when not yet stored
-    if (!user.displayName) {
-      const devUser = getActiveDevUser();
-      return { ...user, displayName: devUser.name };
-    }
-
-    return user;
+    return sanitizeBuddyUser(parsed, userId);
   } catch {
-    const devUser = getActiveDevUser();
-    return sanitizeBuddyUser({ displayName: devUser.name }, userId);
+    return sanitizeBuddyUser({}, userId);
   }
 };
 
 export const saveCurrentUser = async (user: BuddyUser): Promise<void> => {
-  const userId = getActiveDevUserId();
+  const userId = getActiveUserId();
   const toSave: BuddyUser = { ...user, userId, updatedAt: new Date().toISOString() };
   await AsyncStorage.setItem(userKey(userId), JSON.stringify(toSave));
 };

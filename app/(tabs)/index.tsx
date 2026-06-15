@@ -4,14 +4,18 @@ import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getActiveUserId } from '../../lib/auth';
 import { colors } from '../../lib/colors';
 import i18n, { useLanguage } from '../../lib/i18n';
 import { loadUserPreferences, saveUserPreferences } from '../../lib/preferences';
 import { layout, spacing } from '../../lib/spacing';
 import { typography } from '../../lib/typography';
 
-const HOME_SEEN_COUNT_KEY = 'home_seen_count';
 const HOME_HINTS_MAX_SEEN = 3;
+const homeSeenCountKey = () => {
+  const uid = getActiveUserId();
+  return uid ? `home_seen_count_${uid}` : 'home_seen_count';
+};
 
 export default function HomeScreen() {
   useLanguage();
@@ -29,11 +33,11 @@ export default function HomeScreen() {
 
   const trackHomeScreenSeen = useCallback(async () => {
     try {
-      const countRaw = await AsyncStorage.getItem(HOME_SEEN_COUNT_KEY);
+      const countRaw = await AsyncStorage.getItem(homeSeenCountKey());
       const currentCount = getSafeSeenCount(countRaw);
-      const nextCount = currentCount + 1;
+      const nextCount = Math.min(currentCount + 1, HOME_HINTS_MAX_SEEN + 1);
 
-      await AsyncStorage.setItem(HOME_SEEN_COUNT_KEY, String(nextCount));
+      await AsyncStorage.setItem(homeSeenCountKey(), String(nextCount));
       setShowOnboardingHints(nextCount <= HOME_HINTS_MAX_SEEN);
     } catch (error) {
       console.error('Fehler beim Tracken der Home-Nutzung:', error);
@@ -47,7 +51,7 @@ export default function HomeScreen() {
 
       const loadRadius = async () => {
         try {
-          const prefs = await loadUserPreferences();
+          const prefs = await loadUserPreferences(getActiveUserId() || undefined);
           setRadius(prefs.radius);
         } catch (error) {
           console.error('Error loading radius:', error);
@@ -80,8 +84,8 @@ export default function HomeScreen() {
 
   const handleShowJobs = async () => {
     try {
-      const prefs = await loadUserPreferences();
-      await saveUserPreferences({ ...prefs, radius: Math.round(radius) });
+      const prefs = await loadUserPreferences(getActiveUserId() || undefined);
+      await saveUserPreferences({ ...prefs, radius: Math.round(radius) }, getActiveUserId() || undefined);
       router.push('/(tabs)/feed');
     } catch (error) {
       console.error('Error saving radius:', error);
@@ -164,6 +168,14 @@ export default function HomeScreen() {
     </View>
   );
 }
+
+export const resetHomeHintsCounter = async (): Promise<void> => {
+  try {
+    await AsyncStorage.removeItem(homeSeenCountKey());
+  } catch (error) {
+    console.error('Error resetting home hints counter:', error);
+  }
+};
 
 const styles = StyleSheet.create({
   container: {

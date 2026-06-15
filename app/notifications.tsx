@@ -1,25 +1,28 @@
 import Ionicons from '@expo/vector-icons/Ionicons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Haptics from 'expo-haptics';
 import { useFocusEffect, useRouter } from 'expo-router';
-import { useCallback, useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import { ActivityIndicator, Animated, Image, Modal, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getActiveUserId } from '../lib/auth';
 import { colors } from '../lib/colors';
+import { debugLog } from '../lib/config/debug';
+import { eventBus } from '../lib/event-bus';
 import i18n, { useLanguage } from '../lib/i18n';
-import { reviewJobApplication } from '../lib/job-actions';
 import { Job } from '../lib/jobs';
 import { goBackOrReplace } from '../lib/navigation';
 import {
-    createNotification,
-    getEnabledNotificationPreferenceCount,
     getNotificationPresentation,
     getUnreadNotificationCount,
-    loadNotificationPreferences,
-    loadNotificationsFromStorage,
     Notification,
-    NotificationPreferences,
-    saveNotificationsToStorage,
 } from '../lib/notifications';
+import { loadJobs } from '../services/jobs.service';
+import {
+    deleteJobApplicationNotification,
+    getNotifications,
+    setNotifications as saveNotificationsService,
+} from '../services/notifications.service';
+import { fetchApplicantPreview, ApplicantPreview, updateJobRequest } from '../services/job-requests.service';
 import { layout, spacing } from '../lib/spacing';
 import { getReliabilitySignal, getTrustStarFillRatio } from '../lib/trust';
 import { typography } from '../lib/typography';
@@ -30,32 +33,82 @@ export default function NotificationsScreen() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
   const [notifications, setNotifications] = useState<Notification[]>([]);
-  const [preferences, setPreferences] = useState<NotificationPreferences | null>(null);
   const [reviewingJobId, setReviewingJobId] = useState<string | null>(null);
   const [applicationJobsById, setApplicationJobsById] = useState<Record<string, Job>>({});
+  const [buddyPreview, setBuddyPreview] = useState<{ data: ApplicantPreview | null; loading: boolean } | null>(null);
+  const [toast, setToast] = useState<{ message: string; variant: 'success' | 'error' } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const emptyFade = useRef(new Animated.Value(0)).current;
+  const seenIds = useRef(new Set<string>());
+  const cardAnims = useRef(new Map<string, Animated.Value>()).current;
+  const loadedJobIds = useRef(new Set<string>());
+
+  useEffect(() => {
+    if (toast) {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      toastTimer.current = setTimeout(() => setToast(null), 2500);
+    }
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    };
+  }, [toast]);
+
+  useEffect(() => {
+    if (notifications.length === 0) {
+      Animated.timing(emptyFade, {
+        toValue: 1,
+        duration: 380,
+        useNativeDriver: true,
+      }).start();
+    }
+  }, [notifications.length, emptyFade]);
+
+  const showToast = (message: string, variant: 'success' | 'error' = 'success') => {
+    setToast({ message, variant });
+  };
 
   const loadNotifications = useCallback(async () => {
     try {
-      const loaded = await loadNotificationsFromStorage();
+      const loaded = await getNotifications();
+      debugLog(
+        `[notifications] load: sessionUid=${getActiveUserId()} count=${loaded.length}` +
+        (loaded.length > 0
+          ? ` types=${[...new Set(loaded.map((n: Notification) => n.type))].join(',')}`
+          : '')
+      );
+
+      // Animate cards that haven't been seen before
+      loaded.forEach((n: Notification) => {
+        if (!seenIds.current.has(n.id)) {
+          const anim = new Animated.Value(0);
+          cardAnims.set(n.id, anim);
+          Animated.timing(anim, { toValue: 1, duration: 260, useNativeDriver: true }).start();
+        }
+      });
+      loaded.forEach((n: Notification) => seenIds.current.add(n.id));
+
       setNotifications(loaded);
 
       const relatedJobIds = loaded
         .filter(
-          (entry) =>
+          (entry: Notification) =>
             entry.type === 'jobApplication' &&
             typeof entry.relatedJobId === 'string' &&
             entry.relatedJobId.trim().length > 0
         )
-        .map((entry) => String(entry.relatedJobId));
+        .map((entry: Notification) => String(entry.relatedJobId));
 
       if (relatedJobIds.length === 0) {
         setApplicationJobsById({});
+        loadedJobIds.current.clear();
         return;
       }
 
-      const jobsRaw = await AsyncStorage.getItem('jobs');
-      const parsedJobs = jobsRaw ? JSON.parse(jobsRaw) : [];
-      const safeJobs: Job[] = Array.isArray(parsedJobs) ? parsedJobs : [];
+      const hasNewIds = relatedJobIds.some(id => !loadedJobIds.current.has(id));
+      if (!hasNewIds) return;
+
+      const safeJobs: Job[] = await loadJobs();
+      relatedJobIds.forEach(id => loadedJobIds.current.add(id));
 
       const nextById = safeJobs.reduce<Record<string, Job>>((acc, job) => {
         if (relatedJobIds.includes(String(job.id))) {
@@ -72,21 +125,16 @@ export default function NotificationsScreen() {
     }
   }, []);
 
-  const loadPreferences = useCallback(async () => {
-    try {
-      const prefs = await loadNotificationPreferences();
-      setPreferences(prefs);
-    } catch {
-      // non-fatal, omit summary
-    }
-  }, []);
+  // Instant refresh via event bus
+  useEffect(() => {
+    return eventBus.on('notifications:changed', loadNotifications);
+  }, [loadNotifications]);
 
-  // Load on focus
+  // Load on focus (cold start / tab switch)
   useFocusEffect(
     useCallback(() => {
       loadNotifications();
-      loadPreferences();
-    }, [loadNotifications, loadPreferences])
+    }, [loadNotifications])
   );
 
   const markAsRead = async (id: string) => {
@@ -95,7 +143,7 @@ export default function NotificationsScreen() {
         n.id === id ? { ...n, read: true } : n
       );
       setNotifications(updated);
-      await saveNotificationsToStorage(updated);
+      await saveNotificationsService(updated);
     } catch (error) {
       console.error('Error marking as read:', error);
     }
@@ -107,7 +155,7 @@ export default function NotificationsScreen() {
         n.id === id ? { ...n, read: false } : n
       );
       setNotifications(updated);
-      await saveNotificationsToStorage(updated);
+      await saveNotificationsService(updated);
     } catch (error) {
       console.error('Error marking as unread:', error);
     }
@@ -117,9 +165,11 @@ export default function NotificationsScreen() {
     try {
       const updated = notifications.filter((n) => n.id !== id);
       setNotifications(updated);
-      await saveNotificationsToStorage(updated);
+      await saveNotificationsService(updated);
+      showToast(isEnglish ? 'Deleted' : 'Gelöscht');
     } catch (error) {
       console.error('Error deleting notification:', error);
+      showToast(isEnglish ? 'Could not delete notification.' : 'Löschen fehlgeschlagen.', 'error');
     }
   };
 
@@ -127,9 +177,11 @@ export default function NotificationsScreen() {
     try {
       const updated = notifications.map((n) => ({ ...n, read: true }));
       setNotifications(updated);
-      await saveNotificationsToStorage(updated);
+      await saveNotificationsService(updated);
+      showToast(isEnglish ? 'All marked as read' : 'Alle als gelesen markiert');
     } catch (error) {
       console.error('Error marking all as read:', error);
+      showToast(isEnglish ? 'Something went wrong.' : 'Etwas ist schiefgelaufen.', 'error');
     }
   };
 
@@ -178,38 +230,44 @@ export default function NotificationsScreen() {
     if (!notification.relatedJobId) return;
     const jobId = String(notification.relatedJobId);
 
-    const matchedJob = applicationJobsById[jobId];
-    const pendingApplication =
-      matchedJob?.match?.applications?.find((a) => a.requesterDecision === 'pending') ??
-      matchedJob?.match?.applications?.at(-1);
-    const buddyId = pendingApplication?.buddyId;
-    if (!buddyId) return;
+    // Prefer DB-authoritative sources: actorId (actor_id column) or payload.buddyId.
+    // Fall back to local job state for backwards compat with local-only notifications.
+    const buddyId =
+      notification.actorId ??
+      (notification.payload?.buddyId as string | undefined) ??
+      (notification.relatedUserId) ??
+      (() => {
+        const matchedJob = applicationJobsById[jobId];
+        const app =
+          matchedJob?.match?.applications?.find((a) => a.requesterDecision === 'pending') ??
+          matchedJob?.match?.applications?.at(-1);
+        return app?.buddyId;
+      })();
+
+    debugLog(
+      `[notifications] reviewApplication: notificationId=${notification.id} type=${notification.type} jobId=${jobId} actorId=${notification.actorId} payloadBuddyId=${notification.payload?.buddyId} resolvedBuddyId=${buddyId} decision=${decision}`
+    );
+
+    if (!buddyId) {
+      showToast(isEnglish ? 'Applicant not found.' : 'Bewerber nicht gefunden.', 'error');
+      return;
+    }
 
     try {
       setReviewingJobId(jobId);
-      const result = await reviewJobApplication({
+      const result = await updateJobRequest({
         jobId,
         buddyId,
         decision,
-        requesterId: 'requester_local',
+        requesterId: getActiveUserId(),
       });
+      debugLog(`[notifications] reviewApplication: result updatedJob=${result.updatedJob?.id} status=${result.updatedJob?.status}`);
 
-      if (decision === 'accept' || decision === 'decline') {
-        const type =
-          decision === 'accept' ? 'jobApplicationAccepted' : 'jobApplicationDeclined';
-        const title =
-          decision === 'accept'
-            ? i18n.t('notifications.job_application_accepted_title')
-            : i18n.t('notifications.job_application_declined_title');
-        const message =
-          decision === 'accept'
-            ? i18n.t('notifications.job_application_accepted_message')
-            : i18n.t('notifications.job_application_declined_message');
-
-        const created = createNotification(type, title, message, jobId);
-        const withUpdate = [created, ...notifications];
-        setNotifications(withUpdate);
-        await saveNotificationsToStorage(withUpdate);
+      // The DB trigger sends jobApplicationAccepted/Declined to the buddy.
+      // No local notification needed on the owner side — navigate to chat on
+      // accept, show a confirmation toast on decline.
+      if (decision === 'decline') {
+        showToast(isEnglish ? 'Applicant declined.' : 'Bewerber abgelehnt.');
       }
 
       if (result.updatedJob) {
@@ -219,25 +277,78 @@ export default function NotificationsScreen() {
         }));
       }
 
-      await markAsRead(notification.id);
+      if (decision === 'accept' && buddyId) {
+        // Remove the stale "Neue Bewerbung" card for this exact job+buddy immediately.
+        await deleteJobApplicationNotification(jobId, buddyId);
+      } else {
+        await markAsRead(notification.id);
+      }
       await loadNotifications();
+
+      if (decision === 'accept') {
+        if (!result.rpcSuccess) {
+          showToast(
+            isEnglish
+              ? 'Server error — please try again.'
+              : 'Serverfehler – bitte erneut versuchen.',
+            'error'
+          );
+        } else if (result.updatedJob) {
+          const j = result.updatedJob;
+          router.push({
+            pathname: '/chat',
+            params: {
+              jobId: j.id,
+              problem: j.problem ?? '',
+              price: j.price ?? '',
+              time: j.time ?? '',
+              timeMode: j.timeMode ?? 'sofort',
+              creatorName: j.creatorName ?? '',
+              currentUserRole: 'auftraggeber',
+            },
+          });
+        } else {
+          showToast(
+            isEnglish
+              ? 'Accepted — chat could not be opened.'
+              : 'Angenommen – Chat konnte nicht geöffnet werden.',
+            'error'
+          );
+        }
+      }
     } catch (error) {
-      console.error('Error reviewing application:', error);
+      console.warn('[notifications] reviewApplication error:', error);
+      showToast(isEnglish ? 'Action failed. Please try again.' : 'Aktion fehlgeschlagen.', 'error');
     } finally {
       setReviewingJobId(null);
     }
   };
 
-  const unreadCount = getUnreadNotificationCount(notifications);
-  const enabledCount = preferences ? getEnabledNotificationPreferenceCount(preferences) : null;
-  const totalCount = 5;
+  const openBuddyPreview = async (notification: Notification) => {
+    if (!notification.relatedJobId) return;
+    const jobId = String(notification.relatedJobId);
+    const buddyId =
+      notification.actorId ??
+      (notification.payload?.buddyId as string | undefined);
 
-  const getPreferencesSummary = (): string => {
-    if (enabledCount === null) return '';
-    if (enabledCount === totalCount) return i18n.t('notifications.center_preferences_summary_all');
-    if (enabledCount === 0) return i18n.t('notifications.center_preferences_summary_none');
-    return i18n.t('notifications.center_preferences_summary_partial', { count: enabledCount, total: totalCount });
+    debugLog(
+      `[notifications] openBuddyPreview: buddyId=${buddyId} jobId=${jobId} sessionUid=${getActiveUserId()}`
+    );
+
+    if (!buddyId) {
+      showToast(isEnglish ? 'Profile not available.' : 'Profil nicht verfügbar.', 'error');
+      return;
+    }
+
+    setBuddyPreview({ data: null, loading: true });
+    const preview = await fetchApplicantPreview(jobId, buddyId);
+    debugLog(
+      `[notifications] openBuddyPreview: result name=${preview?.buddyName} rating=${preview?.buddyRatingAverage} score=${preview?.buddyScore}`
+    );
+    setBuddyPreview({ data: preview, loading: false });
   };
+
+  const unreadCount = getUnreadNotificationCount(notifications);
 
   const getApplicationTrustModel = (relatedJobId: string) => {
     const matchedJob = applicationJobsById[String(relatedJobId)];
@@ -291,12 +402,6 @@ export default function NotificationsScreen() {
                 </Text>
               </Pressable>
             )}
-            <Pressable
-              style={styles.settingsButton}
-              onPress={() => router.push('/notifications-settings')}
-            >
-              <Ionicons name="options-outline" size={18} color={colors.textPrimary} />
-            </Pressable>
           </View>
         </View>
         <Text style={styles.title}>{i18n.t('notifications.title')}</Text>
@@ -305,16 +410,6 @@ export default function NotificationsScreen() {
             ? i18n.t('notifications.unread_count', { count: unreadCount })
             : i18n.t('notifications.all_read')}
         </Text>
-        {enabledCount !== null && (
-          <Pressable
-            style={styles.preferencesBanner}
-            onPress={() => router.push('/notifications-settings')}
-          >
-            <Ionicons name="notifications-outline" size={13} color={colors.textSecondary} />
-            <Text style={styles.preferencesBannerText}>{getPreferencesSummary()}</Text>
-            <Ionicons name="chevron-forward" size={13} color={colors.textSecondary} />
-          </Pressable>
-        )}
       </View>
 
       {notifications.length === 0 ? (
@@ -323,24 +418,15 @@ export default function NotificationsScreen() {
           contentContainerStyle={styles.emptyContent}
           showsVerticalScrollIndicator={false}
         >
-          <View style={styles.emptyState}>
-            <Ionicons name="notifications-off-outline" size={32} color={colors.textSecondary} style={styles.emptyIcon} />
+          <Animated.View style={[styles.emptyState, { opacity: emptyFade }]}>
+            <Ionicons name="notifications-outline" size={40} color="#FF7A55" style={styles.emptyIcon} />
             <Text style={styles.emptyTitle}>
               {i18n.t('notifications.empty_title')}
             </Text>
             <Text style={styles.emptyText}>
               {i18n.t('notifications.empty_state')}
             </Text>
-            <Pressable
-              style={styles.emptyCta}
-              onPress={() => router.push('/notifications-settings')}
-            >
-              <Ionicons name="settings-outline" size={14} color={colors.textPrimary} />
-              <Text style={styles.emptyCtaText}>
-                {i18n.t('notifications.empty_cta')}
-              </Text>
-            </Pressable>
-          </View>
+          </Animated.View>
         </ScrollView>
       ) : (
         <ScrollView
@@ -353,11 +439,36 @@ export default function NotificationsScreen() {
               notification.relatedJobId && notification.type === 'jobApplication'
                 ? getApplicationTrustModel(String(notification.relatedJobId))
                 : null;
+            const buddyName = notification.type === 'jobApplication' && notification.relatedJobId
+              ? (applicationJobsById[String(notification.relatedJobId)]?.match?.applications?.at(-1))?.buddyName || i18n.t('common.default_user_name')
+              : null;
+            const presentation = getNotificationPresentation(notification.type);
+            const iconColor =
+              presentation.tone === 'success' ? colors.green :
+              presentation.tone === 'highlight' ? colors.primary :
+              presentation.tone === 'message' ? colors.secondary :
+              colors.textPrimary;
+
+            const cardAnim = cardAnims.get(notification.id) ?? new Animated.Value(1);
+
+            const isNavigable = notification.type !== 'jobApplication' &&
+              Boolean(notification.relatedJobId) &&
+              NAVIGABLE_TYPES.includes(notification.type);
 
             return (
-            <View
+            <Pressable
               key={notification.id}
-              style={[styles.card, !notification.read ? styles.unreadCard : styles.readCard]}
+              onPress={() => { if (isNavigable) navigateToJob(notification); }}
+            >
+            <Animated.View
+              style={[
+                styles.card,
+                !notification.read ? styles.unreadCard : styles.readCard,
+                {
+                  opacity: cardAnim,
+                  transform: [{ translateY: cardAnim.interpolate({ inputRange: [0, 1], outputRange: [8, 0] }) }],
+                },
+              ]}
             >
               <View style={styles.cardContent}>
                 <View style={styles.cardHeader}>
@@ -365,15 +476,15 @@ export default function NotificationsScreen() {
                     <View
                       style={[
                         styles.typeIconWrap,
-                        getNotificationPresentation(notification.type).tone === 'success' && styles.typeIconSuccess,
-                        getNotificationPresentation(notification.type).tone === 'highlight' && styles.typeIconHighlight,
-                        getNotificationPresentation(notification.type).tone === 'message' && styles.typeIconMessage,
+                        presentation.tone === 'success' && styles.typeIconSuccess,
+                        presentation.tone === 'highlight' && styles.typeIconHighlight,
+                        presentation.tone === 'message' && styles.typeIconMessage,
                       ]}
                     >
                       <Ionicons
-                        name={getNotificationPresentation(notification.type).iconName}
-                        size={14}
-                        color={colors.textPrimary}
+                        name={presentation.iconName}
+                        size={15}
+                        color={iconColor}
                       />
                     </View>
                     <Text style={styles.cardTitle}>{notification.title}</Text>
@@ -383,72 +494,86 @@ export default function NotificationsScreen() {
                     {formatDate(notification.createdAt)}
                   </Text>
                 </View>
-                <Text style={styles.cardMessage}>{notification.message}</Text>
+                {notification.type !== 'jobApplication' && (
+                  <Text style={styles.cardMessage}>{notification.message}</Text>
+                )}
+                {notification.type === 'jobApplication' && (
+                  <Text style={styles.cardMessage}>{notification.message}</Text>
+                )}
                 {notification.type === 'jobApplication' && notification.relatedJobId && (applicationJobsById[String(notification.relatedJobId)]?.match?.applications?.length ?? 0) > 0 && (
-                  <View style={styles.applicationMetaRow}>
-                    <Text style={styles.applicationMetaText}>
-                      {i18n.t('notifications.requester_review_candidate', {
-                        buddy: (applicationJobsById[String(notification.relatedJobId)]?.match?.applications?.at(-1))?.buddyName || i18n.t('common.default_user_name'),
-                        score: (applicationJobsById[String(notification.relatedJobId)]?.match?.applications?.at(-1))?.buddyScore ?? 0,
-                        jobs: (applicationJobsById[String(notification.relatedJobId)]?.match?.applications?.at(-1))?.buddyCompletedJobs ?? 0,
-                      })}
+                  <View style={styles.applicationReviewSection}>
+                    <Text style={styles.applicationBuddyAction}>
+                      {i18n.t('notifications.requester_review_candidate', { buddy: buddyName ?? '' })}
                     </Text>
                     {applicationTrust && (
                       <View style={styles.applicationTrustRow}>
-                        <View style={styles.trustStarWrap}>
-                          <Text style={styles.trustStarBase}>★</Text>
-                          <View
-                            style={[
-                              styles.trustStarFillClip,
-                              {
-                                width: `${
-                                  Math.max(0, Math.min(1, applicationTrust.fill)) * 100
-                                }%`,
-                              },
-                            ]}
-                          >
-                            <Text style={styles.trustStarFill}>★</Text>
-                          </View>
-                        </View>
-
-                        <Text style={styles.applicationTrustText}>
-                          {applicationTrust.ratingAverage !== null
-                            ? i18n.t('notifications.requester_review_rating', {
+                        {applicationTrust.ratingAverage !== null ? (
+                          <>
+                            <View style={styles.trustStarWrap}>
+                              <Text style={styles.trustStarBase}>★</Text>
+                              <View
+                                style={[
+                                  styles.trustStarFillClip,
+                                  { width: `${Math.max(0, Math.min(1, applicationTrust.fill)) * 100}%` },
+                                ]}
+                              >
+                                <Text style={styles.trustStarFill}>★</Text>
+                              </View>
+                            </View>
+                            <Text style={styles.applicationTrustText}>
+                              {i18n.t('notifications.requester_review_rating', {
                                 rating: applicationTrust.ratingAverage.toFixed(1),
                                 count: applicationTrust.ratingCount,
-                              })
-                            : i18n.t('notifications.requester_review_rating_empty')}
-                        </Text>
-
-                        <View style={styles.applicationTrustChip}>
-                          <Text style={styles.applicationTrustChipText}>
-                            {i18n.t('notifications.requester_review_completed_jobs', {
-                              count: applicationTrust.completedJobs,
-                            })}
-                          </Text>
-                        </View>
-
-                        <View style={styles.applicationTrustChip}>
-                          <Text style={styles.applicationTrustChipText}>
-                            {i18n.t(`notifications.requester_review_reliability_${applicationTrust.reliability}`)}
-                          </Text>
-                        </View>
+                              })}
+                            </Text>
+                          </>
+                        ) : (
+                          <View style={styles.newBuddyBadge}>
+                            <Text style={styles.newBuddyBadgeText}>
+                              {i18n.t('notifications.requester_review_rating_empty')}
+                            </Text>
+                          </View>
+                        )}
+                        {applicationTrust.completedJobs > 0 && (
+                          <View style={styles.applicationTrustChip}>
+                            <Text style={styles.applicationTrustChipText}>
+                              {i18n.t('notifications.requester_review_completed_jobs', {
+                                count: applicationTrust.completedJobs,
+                              })}
+                            </Text>
+                          </View>
+                        )}
+                        {applicationTrust.reliability !== 'new' && (
+                          <View style={styles.applicationTrustChip}>
+                            <Text style={styles.applicationTrustChipText}>
+                              {i18n.t(`notifications.requester_review_reliability_${applicationTrust.reliability}`)}
+                            </Text>
+                          </View>
+                        )}
                       </View>
                     )}
+                    <Text style={styles.reviewSafetyHint}>
+                      {i18n.t('notifications.requester_review_safety_hint')}
+                    </Text>
                   </View>
                 )}
-                <View style={styles.metaRow}>
-                  <Text style={styles.cardType}>
-                    {getNotificationTypeLabel(notification.type)}
-                  </Text>
-                </View>
+                {notification.type !== 'jobApplication' && (
+                  <View style={styles.metaRow}>
+                    <Text style={styles.cardType}>
+                      {getNotificationTypeLabel(notification.type)}
+                    </Text>
+                  </View>
+                )}
               </View>
 
               {notification.type === 'jobApplication' && notification.relatedJobId && (
                 <View style={styles.requesterReviewActions}>
                   <Pressable
                     style={[styles.reviewActionButton, styles.reviewActionAccept, reviewingJobId === String(notification.relatedJobId) && styles.actionButtonDisabled]}
-                    onPress={() => reviewApplication(notification, 'accept')}
+                    onPress={() => {
+                      Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Light);
+                      reviewApplication(notification, 'accept');
+                    }}
                     disabled={reviewingJobId === String(notification.relatedJobId)}
                   >
                     <Text style={styles.reviewActionAcceptText}>{i18n.t('notifications.requester_accept')}</Text>
@@ -460,65 +585,141 @@ export default function NotificationsScreen() {
                   >
                     <Text style={styles.reviewActionDeclineText}>{i18n.t('notifications.requester_decline')}</Text>
                   </Pressable>
-                  <Pressable
-                    style={[styles.reviewActionButton, reviewingJobId === String(notification.relatedJobId) && styles.actionButtonDisabled]}
-                    onPress={() => reviewApplication(notification, 'wait')}
-                    disabled={reviewingJobId === String(notification.relatedJobId)}
-                  >
-                    <Text style={styles.reviewActionWaitText}>{i18n.t('notifications.requester_wait')}</Text>
-                  </Pressable>
                 </View>
               )}
 
               <View style={styles.actions}>
-                {notification.relatedJobId && NAVIGABLE_TYPES.includes(notification.type) && (
-                  <Pressable
-                    style={[styles.actionButton, styles.viewButton]}
-                    onPress={() => navigateToJob(notification)}
-                  >
-                    <Ionicons name="arrow-forward-outline" size={14} color={colors.textPrimary} />
-                    <Text style={styles.viewButtonText} numberOfLines={1}>
-                      {isEnglish ? 'View' : 'Ansehen'}
-                    </Text>
-                  </Pressable>
-                )}
-                {!notification.read ? (
-                  <Pressable
-                    style={[styles.actionButton, styles.actionPrimaryButton]}
-                    onPress={() => markAsRead(notification.id)}
-                  >
-                    <Ionicons name="checkmark-done-outline" size={14} color={colors.secondary} />
-                    <Text style={styles.actionText} numberOfLines={1}>
-                      {i18n.t('notifications.mark_as_read')}
-                    </Text>
-                  </Pressable>
-                ) : (
-                  <Pressable
-                    style={[styles.actionButton, styles.actionPrimaryButton, styles.secondaryButton]}
-                    onPress={() => markAsUnread(notification.id)}
-                  >
-                    <Ionicons name="mail-unread-outline" size={14} color={colors.secondary} />
-                    <Text style={[styles.actionText, styles.secondaryText]} numberOfLines={1}>
-                      {i18n.t('notifications.mark_as_unread')}
-                    </Text>
-                  </Pressable>
-                )}
-
+                <View style={styles.actionsStart}>
+                  {notification.type === 'jobApplication' && notification.relatedJobId && (
+                    <Pressable
+                      style={styles.utilityAction}
+                      onPress={() => openBuddyPreview(notification)}
+                    >
+                      <Ionicons name="person-outline" size={13} color={colors.textSecondary} />
+                      <Text style={styles.utilityActionText} numberOfLines={1}>
+                        {i18n.t('notifications.view_profile')}
+                      </Text>
+                    </Pressable>
+                  )}
+                  {!notification.read ? (
+                    <Pressable
+                      style={styles.utilityAction}
+                      onPress={() => markAsRead(notification.id)}
+                    >
+                      <Ionicons name="checkmark-done-outline" size={13} color={colors.secondary} />
+                      <Text style={[styles.utilityActionText, styles.utilityActionTextAccent]} numberOfLines={1}>
+                        {i18n.t('notifications.mark_as_read')}
+                      </Text>
+                    </Pressable>
+                  ) : (
+                    <Pressable
+                      style={styles.utilityAction}
+                      onPress={() => markAsUnread(notification.id)}
+                    >
+                      <Ionicons name="mail-unread-outline" size={13} color={colors.textSecondary} />
+                      <Text style={styles.utilityActionText} numberOfLines={1}>
+                        {i18n.t('notifications.mark_as_unread')}
+                      </Text>
+                    </Pressable>
+                  )}
+                </View>
                 <Pressable
-                  style={[styles.actionButton, styles.deleteButton]}
+                  style={styles.utilityActionDelete}
                   onPress={() => deleteNotification(notification.id)}
                 >
-                  <Ionicons name="trash-outline" size={14} color={colors.primary} />
-                  <Text style={[styles.deleteActionText, styles.deleteText]} numberOfLines={1}>
+                  <Ionicons name="trash-outline" size={13} color={colors.red} />
+                  <Text style={[styles.utilityActionText, styles.utilityActionTextDelete]} numberOfLines={1}>
                     {i18n.t('notifications.delete')}
                   </Text>
                 </Pressable>
               </View>
-            </View>
+            </Animated.View>
+            </Pressable>
             );
           })}
         </ScrollView>
       )}
+
+      {toast && (
+        <View
+          style={[
+            styles.toast,
+            toast.variant === 'error' && styles.toastError,
+            { bottom: insets.bottom + spacing.xxl },
+          ]}
+          pointerEvents="none"
+        >
+          <Text style={styles.toastText}>{toast.message}</Text>
+        </View>
+      )}
+
+      <Modal
+        visible={buddyPreview !== null}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setBuddyPreview(null)}
+      >
+        <Pressable style={styles.previewOverlay} onPress={() => setBuddyPreview(null)}>
+          <Pressable style={[styles.previewSheet, { paddingBottom: insets.bottom + spacing.lg }]}>
+            <View style={styles.previewHandle} />
+            <Text style={styles.previewTitle}>{i18n.t('notifications.buddy_preview_title')}</Text>
+
+            {buddyPreview?.loading ? (
+              <ActivityIndicator color={colors.secondary} style={{ marginVertical: spacing.xl }} />
+            ) : buddyPreview?.data ? (
+              <View style={styles.previewBody}>
+                {buddyPreview.data.avatarUrl ? (
+                  <Image source={{ uri: buddyPreview.data.avatarUrl }} style={styles.previewAvatar} />
+                ) : (
+                  <View style={[styles.previewAvatar, styles.previewAvatarPlaceholder]} />
+                )}
+                <Text style={styles.previewName}>{buddyPreview.data.buddyName || '—'}</Text>
+
+                <View style={styles.previewRow}>
+                  {buddyPreview.data.buddyRatingAverage !== null && buddyPreview.data.buddyRatingAverage !== undefined ? (
+                    <Text style={styles.previewMeta}>
+                      {'⭐ ' + i18n.t('notifications.buddy_preview_rating', {
+                        rating: buddyPreview.data.buddyRatingAverage.toFixed(1),
+                        count: buddyPreview.data.buddyRatingCount ?? 0,
+                      })}
+                    </Text>
+                  ) : (
+                    <Text style={styles.previewMeta}>{i18n.t('notifications.buddy_preview_no_rating')}</Text>
+                  )}
+                </View>
+
+                {(buddyPreview.data.buddyCompletedJobs ?? 0) > 0 && (
+                  <Text style={styles.previewMeta}>
+                    {i18n.t('notifications.buddy_preview_jobs', { count: buddyPreview.data.buddyCompletedJobs ?? 0 })}
+                  </Text>
+                )}
+
+                {buddyPreview.data.buddyReliability && (
+                  <View style={styles.previewChip}>
+                    <Text style={styles.previewChipText}>
+                      {i18n.t(`notifications.buddy_preview_level_${buddyPreview.data.buddyReliability}`)}
+                    </Text>
+                  </View>
+                )}
+
+                {buddyPreview.data.buddyScore !== null && buddyPreview.data.buddyScore !== undefined && (
+                  <Text style={styles.previewMeta}>
+                    {i18n.t('notifications.buddy_preview_score', { score: buddyPreview.data.buddyScore })}
+                  </Text>
+                )}
+              </View>
+            ) : (
+              <Text style={[styles.previewMeta, { textAlign: 'center', marginVertical: spacing.xl }]}>
+                {i18n.t('notifications.buddy_preview_no_rating')}
+              </Text>
+            )}
+
+            <Pressable style={styles.previewClose} onPress={() => setBuddyPreview(null)}>
+              <Text style={styles.previewCloseText}>{i18n.t('notifications.buddy_preview_close')}</Text>
+            </Pressable>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
@@ -560,37 +761,6 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: spacing.sm,
   },
-  settingsButton: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    backgroundColor: colors.card,
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 4,
-    shadowOffset: { width: 0, height: 2 },
-    elevation: 2,
-  },
-  preferencesBanner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    marginTop: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.xs,
-    backgroundColor: colors.veryLightGrey,
-    borderRadius: layout.borderRadiusSmall,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignSelf: 'flex-start',
-  },
-  preferencesBannerText: {
-    ...typography.meta,
-    color: colors.textSecondary,
-    flex: 1,
-  },
   title: {
     ...typography.screenTitle,
     color: colors.textPrimary,
@@ -631,11 +801,13 @@ const styles = StyleSheet.create({
   emptyState: {
     backgroundColor: colors.card,
     borderRadius: layout.borderRadiusMedium,
-    padding: layout.screenPaddingX,
+    paddingTop: spacing.xxxl,
+    paddingBottom: spacing.xxxl,
+    paddingHorizontal: layout.screenPaddingX,
     alignItems: 'center',
     shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
     elevation: 3,
     borderWidth: 1,
@@ -644,57 +816,41 @@ const styles = StyleSheet.create({
   emptyTitle: {
     ...typography.sectionTitle,
     color: colors.textPrimary,
+    fontWeight: '700',
     marginBottom: spacing.sm,
+    letterSpacing: -0.2,
   },
   emptyIcon: {
-    marginBottom: spacing.sm,
-    opacity: 0.5,
+    marginBottom: spacing.lg,
   },
   emptyText: {
-    ...typography.body,
+    ...typography.meta,
     color: colors.textSecondary,
     textAlign: 'center',
-    lineHeight: 22,
-  },
-  emptyCta: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: spacing.xs,
-    marginTop: spacing.lg,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    backgroundColor: colors.veryLightGrey,
-    borderRadius: layout.borderRadiusMedium,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  emptyCtaText: {
-    ...typography.meta,
-    color: colors.textPrimary,
-    fontWeight: '600',
+    lineHeight: 20,
+    maxWidth: 220,
   },
   card: {
     backgroundColor: colors.card,
     borderRadius: layout.borderRadiusMedium,
-    padding: layout.cardPadding,
+    padding: spacing.lg,
     marginBottom: spacing.md,
     shadowColor: '#000',
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
-    elevation: 2,
+    elevation: 3,
     borderWidth: 1,
-    borderColor: colors.veryLightGrey2,
+    borderColor: colors.border,
   },
   unreadCard: {
-    backgroundColor: colors.card,
-    borderLeftWidth: 3,
+    backgroundColor: '#FDFCFF',
+    borderLeftWidth: 4,
     borderLeftColor: colors.secondary,
-    shadowOpacity: 0.08,
+    shadowOpacity: 0.10,
   },
   readCard: {
-    opacity: 0.92,
-    backgroundColor: colors.veryLightGrey,
+    backgroundColor: colors.card,
   },
   cardContent: {
     marginBottom: spacing.sm,
@@ -704,7 +860,7 @@ const styles = StyleSheet.create({
     alignItems: 'flex-start',
     justifyContent: 'space-between',
     gap: spacing.sm,
-    marginBottom: spacing.xs,
+    marginBottom: spacing.sm,
   },
   titleRow: {
     flexDirection: 'row',
@@ -713,18 +869,18 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   typeIconWrap: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
+    width: 28,
+    height: 28,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: colors.veryLightGrey,
+    backgroundColor: colors.lightGreyVariant,
   },
   typeIconSuccess: {
-    backgroundColor: colors.lightGreen,
+    backgroundColor: '#DCFCE7',
   },
   typeIconHighlight: {
-    backgroundColor: colors.lightOrange,
+    backgroundColor: '#FFD4C8',
   },
   typeIconMessage: {
     backgroundColor: colors.lightPurple,
@@ -735,10 +891,14 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   unreadDot: {
-    width: 8,
-    height: 8,
-    borderRadius: 4,
+    width: 9,
+    height: 9,
+    borderRadius: 5,
     backgroundColor: colors.secondary,
+    shadowColor: colors.secondary,
+    shadowOpacity: 0.45,
+    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 0 },
   },
   cardMessage: {
     ...typography.body,
@@ -750,20 +910,42 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-start',
+    marginTop: spacing.xs,
   },
-  applicationMetaRow: {
+  applicationReviewSection: {
+    marginBottom: spacing.sm,
+  },
+  applicationBuddyAction: {
+    ...typography.cardTitle,
+    color: colors.textPrimary,
+    fontWeight: '600',
     marginBottom: spacing.xs,
   },
-  applicationMetaText: {
+  reviewSafetyHint: {
+    ...typography.meta,
+    color: colors.placeholder,
+    marginTop: spacing.sm,
+    lineHeight: 18,
+  },
+  newBuddyBadge: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
+    backgroundColor: colors.veryLightGrey,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+  },
+  newBuddyBadgeText: {
     ...typography.meta,
     color: colors.textSecondary,
+    lineHeight: 16,
   },
   applicationTrustRow: {
     flexDirection: 'row',
     flexWrap: 'wrap',
     alignItems: 'center',
     gap: spacing.xs,
-    marginTop: spacing.xs,
+    marginTop: spacing.sm,
   },
   trustStarWrap: {
     width: 15,
@@ -786,7 +968,7 @@ const styles = StyleSheet.create({
   },
   trustStarFill: {
     ...typography.meta,
-    color: colors.secondary,
+    color: colors.yellow,
     lineHeight: 14,
   },
   applicationTrustText: {
@@ -794,26 +976,30 @@ const styles = StyleSheet.create({
     color: colors.textSecondary,
   },
   applicationTrustChip: {
-    borderRadius: 999,
+    borderRadius: 6,
     borderWidth: 1,
-    borderColor: colors.lightBorder,
-    backgroundColor: colors.veryLightGrey,
+    borderColor: colors.border,
+    backgroundColor: colors.lightGreyVariant,
     paddingHorizontal: spacing.sm,
     paddingVertical: 2,
   },
   applicationTrustChipText: {
     ...typography.meta,
-    color: colors.textSecondary,
+    color: colors.mediumDarkGrey,
     lineHeight: 16,
   },
   requesterReviewActions: {
     flexDirection: 'row',
-    gap: spacing.xs,
-    marginBottom: spacing.sm,
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.veryLightGrey2,
+    paddingTop: spacing.md,
   },
   reviewActionButton: {
-    minHeight: 32,
-    borderRadius: layout.borderRadiusSmall,
+    flex: 1,
+    height: 40,
+    borderRadius: 10,
     borderWidth: 1,
     borderColor: colors.lightBorder,
     backgroundColor: colors.card,
@@ -822,23 +1008,23 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   reviewActionAccept: {
-    backgroundColor: colors.lightGreen,
-    borderColor: colors.lightGreen,
+    backgroundColor: colors.secondary,
+    borderColor: colors.secondary,
   },
   reviewActionDecline: {
-    backgroundColor: colors.lightOrange,
-    borderColor: colors.lightOrange,
+    backgroundColor: colors.card,
+    borderColor: colors.border,
   },
   reviewActionAcceptText: {
     ...typography.metaStrong,
-    color: colors.textPrimary,
+    color: colors.card,
   },
   reviewActionDeclineText: {
     ...typography.metaStrong,
-    color: colors.textPrimary,
+    color: colors.textSecondary,
   },
   reviewActionWaitText: {
-    ...typography.meta,
+    ...typography.metaStrong,
     color: colors.textSecondary,
   },
   actionButtonDisabled: {
@@ -850,63 +1036,162 @@ const styles = StyleSheet.create({
   },
   cardType: {
     ...typography.meta,
-    color: colors.iosShadow,
+    color: colors.placeholder,
+    backgroundColor: colors.veryLightGrey,
+    borderRadius: 6,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: 'hidden',
   },
   actions: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    gap: spacing.sm,
-    marginTop: spacing.xs,
+    justifyContent: 'space-between',
     paddingTop: spacing.sm,
     borderTopWidth: 1,
     borderTopColor: colors.veryLightGrey2,
   },
-  actionButton: {
-    borderRadius: layout.borderRadiusMedium,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.sm,
-    alignItems: 'center',
+  actionsStart: {
     flexDirection: 'row',
-    gap: spacing.xs,
-    justifyContent: 'center',
-    minHeight: 34,
+    alignItems: 'center',
+    gap: spacing.sm,
+    flex: 1,
+    flexWrap: 'wrap',
   },
-  actionPrimaryButton: {
-    backgroundColor: 'transparent',
+  utilityAction: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 4,
   },
-  actionText: {
-    color: colors.secondary,
+  utilityActionDelete: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 4,
+    paddingLeft: spacing.sm,
+  },
+  utilityActionText: {
     ...typography.meta,
+    color: colors.textSecondary,
+  },
+  utilityActionTextAccent: {
+    color: colors.secondary,
+    fontWeight: '600',
+  },
+  utilityActionTextDelete: {
+    color: colors.red,
+    fontWeight: '600',
+  },
+  toast: {
+    position: 'absolute',
+    left: layout.screenPaddingX,
+    right: layout.screenPaddingX,
+    backgroundColor: colors.green,
+    borderRadius: layout.borderRadiusSmall,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 6,
+  },
+  toastError: {
+    backgroundColor: colors.red,
+  },
+  toastText: {
+    ...typography.metaStrong,
+    color: colors.card,
     textAlign: 'center',
   },
-  secondaryButton: {
-    backgroundColor: 'transparent',
+  previewOverlay: {
+    flex: 1,
+    backgroundColor: colors.overlay,
+    justifyContent: 'flex-end',
   },
-  secondaryText: {
-    color: colors.secondary,
+  previewSheet: {
+    backgroundColor: colors.card,
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: spacing.sm,
+    paddingHorizontal: layout.screenPaddingX,
+    shadowColor: '#000',
+    shadowOpacity: 0.18,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: -4 },
+    elevation: 12,
   },
-  deleteButton: {
-    backgroundColor: 'transparent',
-    paddingHorizontal: spacing.sm,
+  previewHandle: {
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: colors.lightBorder,
+    alignSelf: 'center',
+    marginBottom: spacing.md,
   },
-  deleteActionText: {
-    ...typography.meta,
+  previewTitle: {
+    ...typography.sectionTitle,
+    color: colors.textSecondary,
+    marginBottom: spacing.lg,
     textAlign: 'center',
   },
-  deleteText: {
-    color: colors.primary,
+  previewBody: {
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+    alignItems: 'flex-start',
   },
-  viewButton: {
-    backgroundColor: 'transparent',
+  previewName: {
+    ...typography.cardTitle,
+    color: colors.textPrimary,
+    fontWeight: '700',
+    fontSize: 18,
+  },
+  previewRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  previewMeta: {
+    ...typography.body,
+    color: colors.textSecondary,
+    lineHeight: 22,
+  },
+  previewChip: {
+    borderRadius: 8,
     borderWidth: 1,
     borderColor: colors.border,
-    borderRadius: layout.borderRadiusMedium,
+    backgroundColor: colors.veryLightGrey,
     paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
   },
-  viewButtonText: {
+  previewChipText: {
     ...typography.meta,
+    color: colors.mediumDarkGrey,
+  },
+  previewClose: {
+    backgroundColor: colors.veryLightGrey,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingVertical: spacing.md,
+    alignItems: 'center',
+    marginTop: spacing.sm,
+  },
+  previewCloseText: {
+    ...typography.metaStrong,
     color: colors.textPrimary,
-    fontWeight: '600',
+  },
+  previewAvatar: {
+    width: 72,
+    height: 72,
+    borderRadius: 36,
+    alignSelf: 'center',
+    marginBottom: spacing.md,
+  },
+  previewAvatarPlaceholder: {
+    backgroundColor: colors.veryLightGrey2,
   },
 });

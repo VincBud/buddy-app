@@ -3,8 +3,7 @@ import { JobCategory } from './jobs';
 /**
  * Canonical Buddy user model.
  *
- * Dev/local: userId comes from getActiveDevUserId() in dev-session.ts.
- * Production (Supabase): userId = auth.uid(); swap storage backend in current-user.ts.
+ * userId = auth.uid() from Supabase; local profile data lives in AsyncStorage until full backend migration.
  *
  * Deliberately no availability fields — notification reach uses radius + interests only.
  */

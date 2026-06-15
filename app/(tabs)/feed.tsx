@@ -1,14 +1,17 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import Ionicons from '@expo/vector-icons/Ionicons';
 import Slider from '@react-native-community/slider';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import RecommendationModal from '../../components/recommendation-modal';
 import { colors } from '../../lib/colors';
+import { debugLog } from '../../lib/config/debug';
 import i18n, { useLanguage } from '../../lib/i18n';
-import { isJobChatAccessible } from '../../lib/job-actions';
-import { getActiveDevUserId } from '../../lib/dev-session';
+import { completeJob as completeJobAction, isJobChatAccessible } from '../../lib/job-actions';
+import { loadJobs as loadJobsService, saveJobs as saveJobsService } from '../../services/jobs.service';
+import { getBuddyScore, setBuddyScore } from '../../services/user.service';
+import { getActiveUserId } from '../../lib/auth';
 import {
     applyJobExpiry,
     getActiveOwnJobs,
@@ -19,7 +22,6 @@ import {
     JobCategory,
 } from '../../lib/jobs';
 import { getLevelInfo, getStatusFromLevel } from '../../lib/levels';
-import { applyPaymentStateForJobStatus, ensureJobPaymentState } from '../../lib/payments';
 import {
     inferJobCategory,
     loadUserPreferences,
@@ -43,6 +45,7 @@ type SmartBadge = {
 };
 
 type EmptyStateConfig = {
+  iconName: 'location-outline' | 'sparkles-outline' | 'briefcase-outline' | 'archive-outline';
   title: string;
   hint: string;
   actionLabel?: string;
@@ -76,6 +79,74 @@ const getDistance = (
   return R * c;
 };
 
+// ─── FeedMediaImage ────────────────────────────────────────────────────────────
+// Wraps the job-card media thumbnail with onLoad/onError diagnostics and a
+// visible fallback so a broken upload never leaves an empty grey frame.
+
+// Module-scope so the warning fires once per URL per app session and broken
+// URLs stay hidden across re-renders / tab switches.
+const brokenFeedImageUrls = new Set<string>();
+
+const FeedMediaImage = memo(({ uri }: { uri: string }) => {
+  const [failed, setFailed] = useState(brokenFeedImageUrls.has(uri));
+  const [bustedUri, setBustedUri] = useState<string | null>(null);
+  const triedRetryRef = useRef(false);
+
+  if (failed) {
+    return (
+      <View style={feedMediaStyles.broken}>
+        <Text style={feedMediaStyles.brokenText}>Bild konnte nicht geladen werden</Text>
+      </View>
+    );
+  }
+  return (
+    <Image
+      source={{ uri: bustedUri ?? uri }}
+      style={feedMediaStyles.preview}
+      onError={() => {
+        // One cache-bust retry, then mark broken permanently to silence the log.
+        if (!triedRetryRef.current && uri.startsWith('http')) {
+          triedRetryRef.current = true;
+          setBustedUri(`${uri}${uri.includes('?') ? '&' : '?'}t=${Date.now()}`);
+          return;
+        }
+        if (!brokenFeedImageUrls.has(uri)) {
+          brokenFeedImageUrls.add(uri);
+          console.warn(`[feed] image broken url=${uri.slice(-80)}`);
+        }
+        setFailed(true);
+      }}
+    />
+  );
+});
+
+const feedMediaStyles = StyleSheet.create({
+  preview: {
+    width: '100%',
+    height: 172,
+    borderRadius: layout.borderRadiusSmall,
+    marginBottom: spacing.lg,
+    backgroundColor: colors.lightGreyVariant,
+  },
+  broken: {
+    width: '100%',
+    height: 172,
+    borderRadius: layout.borderRadiusSmall,
+    marginBottom: spacing.lg,
+    backgroundColor: colors.veryLightGrey,
+    borderWidth: 1,
+    borderColor: colors.lightBorder,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  brokenText: {
+    fontSize: 12,
+    color: colors.placeholder,
+  },
+});
+
+// ───────────────────────────────────────────────────────────────────────────────
+
 export default function FeedScreen() {
   useLanguage();
   const insets = useSafeAreaInsets();
@@ -87,6 +158,7 @@ export default function FeedScreen() {
 
   const [openJobs, setOpenJobs] = useState<Job[]>([]);
   const [acceptedJobs, setAcceptedJobs] = useState<Job[]>([]);
+  const [pendingApplicationJobs, setPendingApplicationJobs] = useState<Job[]>([]);
   const [archivedJobs, setArchivedJobs] = useState<Job[]>([]);
   const [allJobs, setAllJobs] = useState<Job[]>([]);
   const [activeTab, setActiveTab] = useState<TabType>('offen');
@@ -96,6 +168,18 @@ export default function FeedScreen() {
   const [userPreferences, setUserPreferences] = useState<UserPreferences | null>(null);
   const [showRadiusSlider, setShowRadiusSlider] = useState(false);
   const [tempRadius, setTempRadius] = useState(buddyRadius);
+  const [toast, setToast] = useState<{ message: string; variant: 'success' | 'error' } | null>(null);
+  const toastTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    if (toast) {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+      toastTimer.current = setTimeout(() => setToast(null), 2500);
+    }
+    return () => {
+      if (toastTimer.current) clearTimeout(toastTimer.current);
+    };
+  }, [toast]);
 
   const getJobCategory = (job: Job): JobCategory => {
     return (job.category ?? inferJobCategory(job)) as JobCategory;
@@ -128,16 +212,32 @@ export default function FeedScreen() {
   };
 
   const loadJobs = async () => {
+    const t0 = Date.now();
     try {
-      const jobsRaw = await AsyncStorage.getItem('jobs');
-      const loadedUserPreferences = await loadUserPreferences();
+      const rawJobs = await loadJobsService();
+      const loadedUserPreferences = await loadUserPreferences(getActiveUserId() || undefined);
 
-      const parsedJobs = jobsRaw ? JSON.parse(jobsRaw) : [];
-      const rawJobs: Job[] = Array.isArray(parsedJobs) ? parsedJobs : [];
-
-      const { jobs: safeJobs, changed: expiryChanged } = applyJobExpiry(rawJobs);
-      if (expiryChanged) {
-        await AsyncStorage.setItem('jobs', JSON.stringify(safeJobs));
+      // applyJobExpiry returns `changed=true` whenever *any* job's status was
+      // bumped to 'expired', including other users' open-past-expiry jobs that
+      // we have no write permission for. Persisting those would write to local
+      // AsyncStorage only — the next loadJobsService() merge re-imports them as
+      // 'open' (the remote owner never expired them server-side) and we'd flip
+      // them again, producing the "expiry changed → no syncable jobs" cycle
+      // on every focus. We only need to persist when at least one OWNED job
+      // actually transitioned; foreign expiries are kept in-memory for display.
+      const { jobs: safeJobs } = applyJobExpiry(rawJobs);
+      const ownerUserId = getActiveUserId();
+      const ownedFlippedToExpired = safeJobs.some((j, i) => {
+        const before = rawJobs[i];
+        return (
+          before &&
+          before.status !== 'expired' &&
+          j.status === 'expired' &&
+          j.requesterId === ownerUserId
+        );
+      });
+      if (ownedFlippedToExpired) {
+        await saveJobsService(safeJobs);
       }
 
       const parsedRadius = loadedUserPreferences.radius;
@@ -145,9 +245,9 @@ export default function FeedScreen() {
       const filteredOpenJobs = safeJobs.filter((job: Job) => {
         // Only 'open' jobs appear in the public feed; matched/active/completed/cancelled/expired do not
         if (!isJobOpenForApplications(job.status)) return false;
-        if (job.requesterId === getActiveDevUserId()) return false;
+        if (job.requesterId === getActiveUserId()) return false;
         // Exclude jobs the active dev user has already applied to
-        if (job.match?.applications?.some((a) => a.buddyId === getActiveDevUserId())) return false;
+        if (job.match?.applications?.some((a) => a.buddyId === getActiveUserId())) return false;
         if (!job.location) return true;
 
         return getDistance(
@@ -180,54 +280,52 @@ export default function FeedScreen() {
       const accepted = safeJobs.filter(
         (job: Job) =>
           isActiveJobStatus(job.status) &&
-          (job.requesterId === getActiveDevUserId() ||
-            job.match?.selectedApplicationId === getActiveDevUserId())
+          (job.requesterId === getActiveUserId() ||
+            job.match?.selectedApplicationId === getActiveUserId() ||
+            job.assignedBuddyId === getActiveUserId())
+      );
+
+      // Pending tab: jobs the buddy applied to but hasn't been accepted/declined yet
+      const pending = safeJobs.filter(
+        (job: Job) =>
+          job.status === 'open' &&
+          job.requesterId !== getActiveUserId() &&
+          (job.match?.applications ?? []).some(
+            (a) => a.buddyId === getActiveUserId() && a.requesterDecision === 'pending'
+          )
       );
       const archived = safeJobs.filter(
-        (job: Job) => job.status === 'completed' || job.status === 'expired'
+        (job: Job) =>
+          (job.status === 'completed' || job.status === 'expired') &&
+          (job.requesterId === getActiveUserId() ||
+            job.match?.selectedApplicationId === getActiveUserId() ||
+            job.assignedBuddyId === getActiveUserId())
       );
 
       setBuddyRadius(parsedRadius);
       setOpenJobs(sortedOpenJobs);
       setAcceptedJobs(accepted);
+      setPendingApplicationJobs(pending);
       setArchivedJobs(archived);
       setAllJobs(safeJobs);
       setUserPreferences(loadedUserPreferences);
+      debugLog(`[feed] loadJobs total ${Date.now() - t0}ms (open=${sortedOpenJobs.length} accepted=${accepted.length})`);
     } catch (error) {
       console.error('Fehler beim Laden der Jobs:', error);
       setOpenJobs([]);
       setAcceptedJobs([]);
       setArchivedJobs([]);
+      setAllJobs([]);
     }
   };
 
   const completeJob = async (job: Job) => {
     try {
-      const jobsRaw = await AsyncStorage.getItem('jobs');
-      const parsedJobs = jobsRaw ? JSON.parse(jobsRaw) : [];
-      const safeJobs: Job[] = Array.isArray(parsedJobs) ? parsedJobs : [];
-
-      const updatedJobs = safeJobs.map((j) =>
-        j.id === job.id
-          ? {
-              ...j,
-              status: 'completed' as const,
-              payment: applyPaymentStateForJobStatus(
-                ensureJobPaymentState(j),
-                'completed'
-              ),
-            }
-          : j
-      );
-
-      const scoreRaw = await AsyncStorage.getItem('buddyScore');
-      const currentScore = scoreRaw ? Number(scoreRaw) : 0;
-      const updatedScore = currentScore + getBuddyPointsForJob(job);
-
-      await AsyncStorage.setItem('jobs', JSON.stringify(updatedJobs));
-      await AsyncStorage.setItem('buddyScore', updatedScore.toString());
+      await completeJobAction({ jobId: job.id, completedByRole: 'buddy' });
+      const currentScore = await getBuddyScore();
+      await setBuddyScore(currentScore + getBuddyPointsForJob(job));
       await recordJobCompletionEarning(job);
-      await incrementReliabilityStats(getActiveDevUserId(), 'completedJobs');
+      await incrementReliabilityStats(getActiveUserId(), 'completedJobs');
       if (job.requesterId) {
         await incrementReliabilityStats(job.requesterId, 'completedJobs');
       }
@@ -251,15 +349,15 @@ export default function FeedScreen() {
       });
     } catch (error) {
       console.error('Fehler beim Abschließen des Jobs:', error);
-      alert(i18n.t('job.job_complete_error'));
+      setToast({ message: isEnglish ? 'Could not complete job. Please try again.' : 'Abschluss fehlgeschlagen. Bitte erneut versuchen.', variant: 'error' });
     }
   };
 
   const updateRadius = async (newRadius: number) => {
     const rounded = Math.round(newRadius);
     setBuddyRadius(rounded);
-    const prefs = await loadUserPreferences();
-    await saveUserPreferences({ ...prefs, radius: rounded });
+    const prefs = await loadUserPreferences(getActiveUserId() || undefined);
+    await saveUserPreferences({ ...prefs, radius: rounded }, getActiveUserId() || undefined);
     await loadJobs();
   };
 
@@ -277,7 +375,8 @@ export default function FeedScreen() {
         time: job.time,
         timeMode: job.timeMode,
         creatorName: job.creatorName || i18n.t('common.default_user_name'),
-        currentUserRole: 'buddy',
+        currentUserRole:
+          job.requesterId === getActiveUserId() ? 'auftraggeber' : 'buddy',
       },
     });
   };
@@ -334,6 +433,7 @@ export default function FeedScreen() {
     if (activeTab === 'offen') {
       if (hasOpenJobsOutsideRadius) {
         return {
+          iconName: 'location-outline',
           title: i18n.t('job.no_jobs_in_radius'),
           hint: i18n.t('job.no_jobs_in_radius_hint'),
           actionLabel: i18n.t('job.expand_radius'),
@@ -343,6 +443,7 @@ export default function FeedScreen() {
       }
 
       return {
+        iconName: 'sparkles-outline',
         title: i18n.t('job.no_jobs_available'),
         hint: i18n.t('job.no_jobs_available_hint'),
         actionLabel: i18n.t('job.no_jobs_available_action'),
@@ -352,6 +453,7 @@ export default function FeedScreen() {
 
     if (activeTab === 'angenommen') {
       return {
+        iconName: 'briefcase-outline',
         title: i18n.t('job.no_accepted_jobs'),
         hint: i18n.t('job.accepted_jobs_hint'),
         actionLabel: i18n.t('job.accepted_jobs_next_action'),
@@ -360,6 +462,7 @@ export default function FeedScreen() {
     }
 
     return {
+      iconName: 'archive-outline',
       title: i18n.t('job.no_archived_jobs'),
       hint: i18n.t('job.archived_jobs_hint'),
       actionLabel: i18n.t('job.archived_jobs_next_action'),
@@ -544,7 +647,7 @@ export default function FeedScreen() {
   };
 
   const myActivePostedJobs = useMemo(
-    () => getActiveOwnJobs(allJobs, getActiveDevUserId()),
+    () => getActiveOwnJobs(allJobs, getActiveUserId()),
     [allJobs]
   );
 
@@ -619,7 +722,7 @@ export default function FeedScreen() {
         </View>
 
         {job.media && job.media.length > 0 && (
-          <Image source={{ uri: job.media[0] }} style={styles.mediaPreview} />
+          <FeedMediaImage uri={job.media[0]} />
         )}
 
         <View style={styles.cardHeaderRow}>
@@ -737,40 +840,71 @@ export default function FeedScreen() {
               </View>
             )}
             {creatorReliability === 'new' && (
-              <Text style={styles.reliabilityNewText}>
-                {i18n.t('job.signal_reliability_new')}
-              </Text>
+              <View style={styles.reliabilityNewBadge}>
+                <Text style={styles.reliabilityNewBadgeText}>
+                  {i18n.t('job.signal_reliability_new')}
+                </Text>
+              </View>
             )}
           </View>
         )}
 
         {activeTab === 'angenommen' ? (
-          <View style={styles.actionGroup}>
-            <Pressable
-              style={styles.secondaryActionButton}
-              onPress={() => openChat(job)}
-            >
-              <Text style={styles.secondaryActionButtonText}>
-                {i18n.t('common.chat')}
+          job.status === 'open' ? (
+            // Pending application — buddy waiting for owner confirmation
+            <View style={styles.pendingBanner}>
+              <Text style={styles.pendingBannerText}>
+                {isEnglish ? 'Awaiting confirmation' : 'Anfrage ausstehend'}
               </Text>
-            </Pressable>
+            </View>
+          ) : (
+            <>
+              {job.status === 'issue_reported' && (
+                <View style={styles.issueStatusRow}>
+                  <View style={styles.issueChip}>
+                    <Text style={styles.issueChipText}>
+                      {i18n.t('job.status_issue', { defaultValue: 'Problem gemeldet' })}
+                    </Text>
+                  </View>
+                </View>
+              )}
+              <View style={styles.actionGroup}>
+                <Pressable
+                  style={styles.secondaryActionButton}
+                  onPress={() => openChat(job)}
+                >
+                  <Text style={styles.secondaryActionButtonText}>
+                    {i18n.t('common.chat')}
+                  </Text>
+                </Pressable>
 
-            <Pressable
-              style={styles.primaryActionButton}
-              onPress={() => completeJob(job)}
-            >
-              <Text style={styles.primaryActionButtonText}>
-                {i18n.t('common.done')}
-              </Text>
-            </Pressable>
-          </View>
+                {job.status !== 'issue_reported' && (
+                  <Pressable
+                    style={styles.primaryActionButton}
+                    onPress={() => completeJob(job)}
+                  >
+                    <Text style={styles.primaryActionButtonText}>
+                      {i18n.t('common.done')}
+                    </Text>
+                  </Pressable>
+                )}
+              </View>
+            </>
+          )
         ) : null}
       </>
     );
   };
 
   const renderJobCard = (job: Job) => {
-    if (activeTab === 'offen') {
+    const isPendingApplication =
+      activeTab === 'angenommen' &&
+      job.status === 'open' &&
+      (job.match?.applications ?? []).some(
+        (a) => a.buddyId === getActiveUserId() && a.requesterDecision === 'pending'
+      );
+
+    if (activeTab === 'offen' || isPendingApplication) {
       return (
         <Pressable
           key={job.id}
@@ -840,7 +974,7 @@ export default function FeedScreen() {
               >
                 {i18n.t('job.accepted')}
               </Text>
-              {acceptedJobs.length > 0 && (
+              {(acceptedJobs.length + pendingApplicationJobs.length) > 0 && (
                 <View
                   style={[
                     styles.tabCountBadge,
@@ -853,7 +987,7 @@ export default function FeedScreen() {
                       activeTab === 'angenommen' && styles.tabCountTextActive,
                     ]}
                   >
-                    {acceptedJobs.length}
+                    {acceptedJobs.length + pendingApplicationJobs.length}
                   </Text>
                 </View>
               )}
@@ -877,8 +1011,44 @@ export default function FeedScreen() {
           </Pressable>
         </View>
 
-        {currentJobs.length === 0 ? (
+        {activeTab === 'angenommen' ? (
+          pendingApplicationJobs.length === 0 && acceptedJobs.length === 0 ? (
+            <View style={styles.emptyState}>
+              <Ionicons name={emptyState.iconName} size={36} color={colors.secondary} style={styles.emptyIcon} />
+              <Text style={styles.emptyTitle}>{emptyState.title}</Text>
+              <Text style={styles.emptyText}>{emptyState.hint}</Text>
+              {emptyState.actionLabel && emptyState.onAction && (
+                <Pressable
+                  style={({ pressed }) => [styles.expandButton, pressed && styles.buttonPressed]}
+                  onPress={emptyState.onAction}
+                >
+                  <Text style={styles.expandButtonText}>{emptyState.actionLabel}</Text>
+                </Pressable>
+              )}
+            </View>
+          ) : (
+            <>
+              {pendingApplicationJobs.length > 0 && (
+                <View style={styles.sectionWrap}>
+                  <Text style={styles.sectionHeader}>
+                    {isEnglish ? 'Waiting for confirmation' : 'Warten auf Bestätigung'}
+                  </Text>
+                  {pendingApplicationJobs.map((job) => renderJobCard(job))}
+                </View>
+              )}
+              {acceptedJobs.length > 0 && (
+                <View style={styles.sectionWrap}>
+                  <Text style={styles.sectionHeader}>
+                    {isEnglish ? 'Active' : 'Aktiv'}
+                  </Text>
+                  {acceptedJobs.map((job) => renderJobCard(job))}
+                </View>
+              )}
+            </>
+          )
+        ) : currentJobs.length === 0 ? (
           <View style={styles.emptyState}>
+            <Ionicons name={emptyState.iconName} size={36} color={colors.secondary} style={styles.emptyIcon} />
             <Text style={styles.emptyTitle}>{emptyState.title}</Text>
             <Text style={styles.emptyText}>{emptyState.hint}</Text>
 
@@ -952,6 +1122,19 @@ export default function FeedScreen() {
           currentJobs.map((job) => renderJobCard(job))
         )}
       </ScrollView>
+
+      {toast && (
+        <View
+          style={[
+            styles.toast,
+            toast.variant === 'error' && styles.toastError,
+            { bottom: insets.bottom + spacing.xxl },
+          ]}
+          pointerEvents="none"
+        >
+          <Text style={styles.toastText}>{toast.message}</Text>
+        </View>
+      )}
 
       <RecommendationModal
         visible={showRecommendationsModal}
@@ -1087,25 +1270,31 @@ const styles = StyleSheet.create({
   emptyState: {
     backgroundColor: colors.card,
     borderRadius: layout.borderRadiusMedium,
-    padding: layout.cardPadding,
+    paddingHorizontal: layout.cardPadding,
+    paddingVertical: spacing.xxxl,
     shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 8,
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
     shadowOffset: { width: 0, height: 4 },
     elevation: 3,
     borderWidth: 1,
     borderColor: colors.border,
-    alignItems: 'flex-start',
+    alignItems: 'center',
   },
   emptyTitle: {
     ...typography.sectionTitle,
     color: colors.textPrimary,
     marginBottom: spacing.xs,
+    textAlign: 'center',
   },
   emptyText: {
     ...typography.body,
     color: colors.textSecondary,
     lineHeight: 22,
+    textAlign: 'center',
+  },
+  emptyIcon: {
+    marginBottom: spacing.md,
   },
   sliderContainer: {
     marginTop: spacing.xl,
@@ -1121,7 +1310,7 @@ const styles = StyleSheet.create({
   },
   expandButton: {
     backgroundColor: colors.secondary,
-    borderRadius: layout.borderRadiusSmall,
+    borderRadius: 10,
     paddingVertical: spacing.md,
     paddingHorizontal: layout.cardPadding,
     alignItems: 'center',
@@ -1134,7 +1323,7 @@ const styles = StyleSheet.create({
   },
   applyButton: {
     backgroundColor: colors.primary,
-    borderRadius: layout.borderRadiusSmall,
+    borderRadius: 10,
     paddingVertical: spacing.md,
     paddingHorizontal: layout.cardPadding,
     alignItems: 'center',
@@ -1155,28 +1344,19 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     marginBottom: layout.cardMarginBottom,
     shadowColor: '#000',
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    shadowOffset: { width: 0, height: 8 },
-    elevation: 5,
+    shadowOpacity: 0.06,
+    shadowRadius: 10,
+    shadowOffset: { width: 0, height: 4 },
+    elevation: 3,
     borderWidth: 1,
     borderColor: colors.border,
   },
   cardInteractive: {
     marginBottom: spacing.xl,
-    borderColor: colors.lightOrange,
-    shadowColor: colors.secondary,
   },
   cardPressed: {
     opacity: 0.98,
     transform: [{ scale: 0.992 }],
-  },
-  mediaPreview: {
-    width: '100%',
-    height: 172,
-    borderRadius: layout.borderRadiusSmall,
-    marginBottom: spacing.lg,
-    backgroundColor: colors.lightGreyVariant,
   },
   categoryTopRow: {
     alignItems: 'flex-start',
@@ -1268,9 +1448,9 @@ const styles = StyleSheet.create({
   },
   problemText: {
     color: colors.textPrimary,
-    fontSize: 21,
-    fontWeight: '800',
-    lineHeight: 28,
+    fontSize: 17,
+    fontWeight: '700',
+    lineHeight: 24,
   },
   priceText: {
     color: colors.primary,
@@ -1396,7 +1576,7 @@ const styles = StyleSheet.create({
     shadowOffset: { width: 0, height: 3 },
     elevation: 4,
     zIndex: 20,
-    opacity: 0.55,
+    opacity: 0.8,
   },
   myJobsFabActive: {
     opacity: 1,
@@ -1435,6 +1615,23 @@ const styles = StyleSheet.create({
     fontWeight: '800',
     lineHeight: 13,
   },
+  issueStatusRow: {
+    marginBottom: spacing.sm,
+    alignItems: 'flex-start',
+  },
+  issueChip: {
+    backgroundColor: '#FFF7ED',
+    borderRadius: 999,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderWidth: 1,
+    borderColor: '#FFEDD5',
+  },
+  issueChipText: {
+    ...typography.meta,
+    color: colors.primary,
+    fontWeight: '600',
+  },
   reliabilityTrustedBadge: {
     backgroundColor: '#F0FFF4',
     borderRadius: 999,
@@ -1449,9 +1646,55 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     lineHeight: 14,
   },
-  reliabilityNewText: {
+  reliabilityNewBadge: {
+    backgroundColor: colors.veryLightGrey,
+    borderRadius: 999,
+    paddingVertical: 2,
+    paddingHorizontal: 7,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  reliabilityNewBadgeText: {
     color: colors.placeholder,
     fontSize: 10,
+    fontWeight: '500',
     lineHeight: 14,
+  },
+  toast: {
+    position: 'absolute',
+    left: layout.screenPaddingX,
+    right: layout.screenPaddingX,
+    backgroundColor: colors.green,
+    borderRadius: layout.borderRadiusSmall,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    shadowColor: '#000',
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    shadowOffset: { width: 0, height: 3 },
+    elevation: 6,
+  },
+  toastError: {
+    backgroundColor: colors.red,
+  },
+  toastText: {
+    ...typography.metaStrong,
+    color: colors.card,
+    textAlign: 'center',
+  },
+  pendingBanner: {
+    marginTop: spacing.md,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.veryLightPurple,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.overlayLightPurple,
+    alignSelf: 'flex-start',
+  },
+  pendingBannerText: {
+    ...typography.meta,
+    color: colors.secondary,
+    fontWeight: '600',
   },
 });

@@ -2,15 +2,18 @@ import Ionicons from '@expo/vector-icons/Ionicons';
 import { useFocusEffect } from '@react-navigation/native';
 import { Tabs, router, useRootNavigationState } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Animated, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../lib/colors';
+import { eventBus } from '../../lib/event-bus';
 import i18n, { useLanguage } from '../../lib/i18n';
 import {
     getUnreadNotificationCount,
     loadNotificationsFromStorage,
 } from '../../lib/notifications';
+import { getActiveUserId } from '../../lib/auth';
 import { loadUserPreferences } from '../../lib/preferences';
+import { fetchVerificationStatus } from '../../services/identity-verification.service';
 
 export default function TabLayout() {
   const language = useLanguage();
@@ -18,6 +21,8 @@ export default function TabLayout() {
   const rootNavigationState = useRootNavigationState();
   const checkedOnboardingRef = useRef(false);
   const [unreadCount, setUnreadCount] = useState(0);
+  const badgeScale = useRef(new Animated.Value(1)).current;
+  const prevUnreadRef = useRef(0);
 
   useEffect(() => {
     if (!rootNavigationState?.key || checkedOnboardingRef.current) return;
@@ -27,7 +32,22 @@ export default function TabLayout() {
 
     const verifyOnboarding = async () => {
       try {
-        const preferences = await loadUserPreferences();
+        // Belt-and-braces identity gate: if a user deep-links straight into
+        // /(tabs) somehow, kick them back to /identity-verification unless
+        // the server says they're approved. Backend RLS still blocks any
+        // privileged action, but this prevents a confusing "broken app"
+        // experience for an unverified user.
+        const verification = await fetchVerificationStatus();
+        if (
+          !cancelled &&
+          verification &&
+          (verification.verificationStatus !== 'approved' || !verification.identityVerifiedAt)
+        ) {
+          router.replace('/identity-verification');
+          return;
+        }
+
+        const preferences = await loadUserPreferences(getActiveUserId() || undefined);
         if (!cancelled && !preferences.onboardingCompleted) {
           router.replace({ pathname: '/preferences', params: { mode: 'onboarding' } });
         }
@@ -47,27 +67,29 @@ export default function TabLayout() {
     try {
       const notifications = await loadNotificationsFromStorage();
       const unread = getUnreadNotificationCount(notifications);
-      setUnreadCount(unread);
-    } catch (error) {
-      console.error('Error loading unread count:', error);
+      setUnreadCount((prev) => {
+        if (unread > prev) {
+          Animated.sequence([
+            Animated.spring(badgeScale, { toValue: 1.45, useNativeDriver: true, speed: 40, bounciness: 12 }),
+            Animated.spring(badgeScale, { toValue: 1, useNativeDriver: true, speed: 20, bounciness: 6 }),
+          ]).start();
+        }
+        prevUnreadRef.current = unread;
+        return unread;
+      });
+    } catch {
       setUnreadCount(0);
     }
-  }, []);
+  }, [badgeScale]);
 
-  // Load on tab focus
+  // Instant updates via event bus; re-sync on focus for cold starts
+  useEffect(() => {
+    return eventBus.on('notifications:changed', loadUnreadCount);
+  }, [loadUnreadCount]);
+
   useFocusEffect(
     useCallback(() => {
       loadUnreadCount();
-    }, [loadUnreadCount])
-  );
-
-  // Poll for updates every 500ms while tab is focused
-  useFocusEffect(
-    useCallback(() => {
-      const interval = setInterval(() => {
-        loadUnreadCount();
-      }, 500);
-      return () => clearInterval(interval);
     }, [loadUnreadCount])
   );
 
@@ -131,11 +153,11 @@ export default function TabLayout() {
       >
         <Ionicons name="notifications-outline" size={22} color={colors.textPrimary} />
         {unreadCount > 0 && (
-          <View style={styles.badge}>
+          <Animated.View style={[styles.badge, { transform: [{ scale: badgeScale }] }]}>
             <Text style={styles.badgeText}>
               {unreadCount > 99 ? '99+' : unreadCount}
             </Text>
-          </View>
+          </Animated.View>
         )}
       </Pressable>
     </View>

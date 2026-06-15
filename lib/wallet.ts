@@ -4,6 +4,7 @@ import i18n from './i18n';
 import { getSafeJobPriceNumber, Job } from './jobs';
 import { ensureJobPaymentState } from './payments';
 import { STORAGE_KEYS } from './storage-keys';
+import { getActiveUserId } from './auth';
 
 const WALLET_TRANSACTIONS_KEY = STORAGE_KEYS.WALLET_TRANSACTIONS;
 const WALLET_PAYOUTS_KEY = STORAGE_KEYS.WALLET_PAYOUT_RECORDS;
@@ -318,8 +319,13 @@ const loadCompletedJobsFromStorage = async (): Promise<Job[]> => {
   const jobsRaw = await AsyncStorage.getItem(STORAGE_KEYS.JOBS);
   const parsedJobs = jobsRaw ? JSON.parse(jobsRaw) : [];
   const safeJobs: Job[] = Array.isArray(parsedJobs) ? parsedJobs : [];
+  const activeUserId = getActiveUserId();
 
-  return safeJobs.filter((job) => job.status === 'completed');
+  return safeJobs.filter(
+    (job) =>
+      job.status === 'completed' &&
+      job.match?.selectedApplicationId === activeUserId
+  );
 };
 
 const getPayoutStatusLabel = (status: WalletPayoutStatus): string => {

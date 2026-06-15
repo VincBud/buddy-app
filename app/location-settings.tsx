@@ -4,6 +4,7 @@ import { useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { getActiveUserId } from '../lib/auth';
 import { colors } from '../lib/colors';
 import i18n, { useLanguage } from '../lib/i18n';
 import {
@@ -34,7 +35,7 @@ export default function LocationSettingsScreen() {
         try {
           const [locationSettings, userPreferences] = await Promise.all([
             loadLocationSettings(),
-            loadUserPreferences(),
+            loadUserPreferences(getActiveUserId() || undefined),
           ]);
           if (isActive) {
             setSettings({ ...locationSettings, radius: userPreferences.radius });
@@ -70,7 +71,7 @@ export default function LocationSettingsScreen() {
     try {
       await saveLocationSettings(settings);
       const prefs = await loadUserPreferences();
-      await saveUserPreferences({ ...prefs, radius: settings.radius });
+      await saveUserPreferences({ ...prefs, radius: settings.radius }, getActiveUserId() || undefined);
       handleBack();
     } catch {
       // non-fatal
