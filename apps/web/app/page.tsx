@@ -3,6 +3,7 @@ import { SiteFooter } from "@/components/site-footer";
 import { SectionHero } from "@/components/section-hero";
 import { SectionProblem } from "@/components/section-problem";
 import { SectionHowItWorks } from "@/components/section-how-it-works";
+import { SectionScreenshots } from "@/components/section-screenshots";
 import { SectionSafety } from "@/components/section-safety";
 import { SectionMvpStatus } from "@/components/section-mvp-status";
 import { SectionFaq } from "@/components/section-faq";
@@ -52,6 +53,7 @@ export default function LandingPage() {
         <SectionHero />
         <SectionProblem />
         <SectionHowItWorks />
+        <SectionScreenshots />
         <SectionSafety />
         <SectionMvpStatus />
         <SectionFaq />
