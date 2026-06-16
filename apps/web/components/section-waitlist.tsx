@@ -3,7 +3,10 @@
 import { useState, type FormEvent } from "react";
 import { getSupabaseBrowserClient } from "@/lib/supabase/client";
 
-type Role = "user" | "buddy" | "both" | "investor" | "press" | "other";
+// Role values MUST match the production CHECK constraint on
+// public.landing_waitlist (landing_waitlist_role_check). Any value not
+// listed below will be rejected by Supabase on insert.
+type Role = "job_creator" | "buddy" | "both" | "partner" | "investor" | "other";
 
 type Status =
   | { kind: "idle" }
@@ -12,12 +15,12 @@ type Status =
   | { kind: "error"; message: string };
 
 const ROLE_OPTIONS: { value: Role; label: string }[] = [
-  { value: "user",     label: "Ich brauche Buddy-Hilfe" },
-  { value: "buddy",    label: "Ich möchte als Buddy helfen" },
-  { value: "both",     label: "Beides" },
-  { value: "investor", label: "Investor" },
-  { value: "press",    label: "Presse" },
-  { value: "other",    label: "Etwas anderes" },
+  { value: "job_creator", label: "Ich brauche Hilfe" },
+  { value: "buddy",       label: "Ich möchte als Buddy helfen" },
+  { value: "both",        label: "Beides" },
+  { value: "partner",     label: "Partner / Kooperation" },
+  { value: "investor",    label: "Investor / Presse / Netzwerk" },
+  { value: "other",       label: "Sonstiges" },
 ];
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -122,6 +125,7 @@ export function SectionWaitlist() {
                       type="text"
                       autoComplete="name"
                       required
+                      maxLength={120}
                       disabled={isSubmitting}
                       value={name}
                       onChange={(e) => setName(e.target.value)}
@@ -135,6 +139,7 @@ export function SectionWaitlist() {
                       autoComplete="email"
                       inputMode="email"
                       required
+                      maxLength={254}
                       disabled={isSubmitting}
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
@@ -146,6 +151,7 @@ export function SectionWaitlist() {
                     <input
                       type="text"
                       autoComplete="address-level2"
+                      maxLength={120}
                       disabled={isSubmitting}
                       value={city}
                       onChange={(e) => setCity(e.target.value)}
