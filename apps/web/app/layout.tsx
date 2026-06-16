@@ -30,7 +30,8 @@ export const metadata: Metadata = {
     "Hyperlokal",
     "On-Demand Hilfe",
     "Nachbarschaftshilfe",
-    "München Pilot",
+    "Rosenheim Test",
+    "Pilot in Rosenheim",
     "Deutschland Early Access",
   ],
   authors: [{ name: SITE_NAME, url: SITE_URL }],
@@ -97,7 +98,7 @@ const siteJsonLd = {
       alternateName: SITE_ALT_NAMES,
       url: SITE_URL,
       description:
-        "Buddy ist ein hyperlokaler Marktplatz für Alltagshilfe in Deutschland. Pilot in München, Early Access in Vorbereitung.",
+        "Buddy ist ein hyperlokaler Marktplatz für Alltagshilfe in Deutschland. Erste Testphase in Rosenheim, Early Access in Vorbereitung.",
       areaServed: { "@type": "Country", name: "Deutschland" },
       knowsLanguage: ["de"],
     },

@@ -17,7 +17,7 @@ export const FAQ_ITEMS = [
   },
   {
     q: "Ist Buddy schon verfügbar?",
-    a: "MVP getestet, Pilot in Vorbereitung, Early Access geöffnet. Wir öffnen schrittweise, beginnend mit dem München-Pilot. Trage dich auf die Warteliste ein, wir melden uns, sobald du dran bist.",
+    a: "MVP getestet, erste Testphase in Rosenheim, Early Access in Vorbereitung. Wir starten bewusst klein mit dem Rosenheim-Test und öffnen erst danach schrittweise weiter in Deutschland. Trage dich auf die Warteliste ein, wir melden uns, sobald du dran bist.",
   },
   {
     q: "Warum setzt Buddy auf Verifizierung?",

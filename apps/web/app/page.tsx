@@ -37,7 +37,7 @@ const softwareAppJsonLd = {
     "Beidseitige Bewertungen nach jedem Auftrag",
   ],
   isAccessibleForFree: true,
-  releaseNotes: "MVP getestet, Pilot in Vorbereitung, Early Access geöffnet.",
+  releaseNotes: "MVP getestet, erste Testphase in Rosenheim, Early Access in Vorbereitung.",
   publisher: { "@id": `${SITE_URL}#organization` },
 };
 

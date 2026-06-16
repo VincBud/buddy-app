@@ -8,17 +8,17 @@ const ITEMS = [
   },
   {
     phase: "Phase 2",
-    title: "München-Pilot",
+    title: "Rosenheim-Test",
     state: "active",
     text:
-      "Pilot in München in Vorbereitung — Verifizierung, Support und Operations werden ausgerollt.",
+      "Erste Testphase in Rosenheim in Vorbereitung — Verifizierung, Support und Operations werden vor Ort ausgerollt.",
   },
   {
     phase: "Phase 3",
     title: "Deutschland Early Access",
-    state: "active",
+    state: "next",
     text:
-      "Early Access geöffnet — wir laden Wartelisten-Plätze schrittweise nach Region und Rolle ein.",
+      "Early Access in Vorbereitung — sobald die Rosenheim-Testphase ausgewertet ist, öffnen wir Wartelisten-Plätze schrittweise nach Region und Rolle.",
   },
 ] as const;
 
@@ -29,11 +29,11 @@ export function SectionMvpStatus() {
         <div className="max-w-3xl">
           <p className="eyebrow mb-4">Aktueller Stand</p>
           <h2 className="text-display-2 text-ink">
-            MVP getestet, Pilot in Vorbereitung, Early Access geöffnet.
+            MVP getestet, erste Testphase in Rosenheim, Early Access in Vorbereitung.
           </h2>
           <p className="mt-5 text-lg leading-relaxed text-ink/70">
             Wir bauen Buddy aktuell mit einer kleinen Gruppe aus der Praxis
-            heraus, beginnend mit dem München-Pilot. Was wir <em>nicht</em>{" "}
+            heraus, beginnend mit dem Rosenheim-Test. Was wir <em>nicht</em>{" "}
             tun: blind skalieren oder einen App-Store-Launch versprechen. Was
             wir tun: jeden Job verstehen, jeden Bug fixen, jede Wartelisten-Anmeldung
             lesen.
