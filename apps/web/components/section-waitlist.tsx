@@ -11,7 +11,7 @@ type Role = "job_creator" | "buddy" | "both" | "partner" | "investor" | "other";
 type Status =
   | { kind: "idle" }
   | { kind: "submitting" }
-  | { kind: "success" }
+  | { kind: "success"; alreadyRegistered: boolean }
   | { kind: "error"; message: string };
 
 const ROLE_OPTIONS: { value: Role; label: string }[] = [
@@ -68,7 +68,22 @@ export function SectionWaitlist() {
       });
 
       if (error) {
-        console.error("[waitlist] insert failed:", error);
+        if (isDuplicateEmailError(error)) {
+          if (process.env.NODE_ENV !== "production") {
+            console.warn("[waitlist] duplicate email — showing already-registered state");
+          }
+          // Friendly "you're already in" success state instead of an error.
+          setStatus({ kind: "success", alreadyRegistered: true });
+          setName("");
+          setEmail("");
+          setCity("");
+          setRole("");
+          setMessage("");
+          return;
+        }
+        if (process.env.NODE_ENV !== "production") {
+          console.error("[waitlist] insert failed:", error);
+        }
         setStatus({
           kind: "error",
           message:
@@ -77,14 +92,16 @@ export function SectionWaitlist() {
         return;
       }
 
-      setStatus({ kind: "success" });
+      setStatus({ kind: "success", alreadyRegistered: false });
       setName("");
       setEmail("");
       setCity("");
       setRole("");
       setMessage("");
     } catch (err) {
-      console.error("[waitlist] unexpected error:", err);
+      if (process.env.NODE_ENV !== "production") {
+        console.error("[waitlist] unexpected error:", err);
+      }
       setStatus({
         kind: "error",
         message:
@@ -111,8 +128,11 @@ export function SectionWaitlist() {
           </div>
 
           <div className="sm:col-span-7">
-            {isSuccess ? (
-              <SuccessCard onReset={() => setStatus({ kind: "idle" })} />
+            {status.kind === "success" ? (
+              <SuccessCard
+                alreadyRegistered={status.alreadyRegistered}
+                onReset={() => setStatus({ kind: "idle" })}
+              />
             ) : (
               <form
                 onSubmit={onSubmit}
@@ -221,6 +241,30 @@ export function SectionWaitlist() {
 const inputClass =
   "w-full rounded-lg border border-mist bg-paper px-4 py-3 text-base text-ink shadow-sm transition placeholder:text-smoke focus:border-purple focus:outline-none focus:ring-2 focus:ring-purple/30 disabled:cursor-not-allowed disabled:opacity-60";
 
+// Detect a Supabase / PostgREST unique-constraint violation when the same
+// email is already on the waitlist. Postgres surfaces this as SQLSTATE
+// 23505; PostgREST forwards the code verbatim on the error envelope. We
+// also fall back to a message/details substring match so future schema
+// changes (different constraint names, error wrapping in newer supabase-js
+// versions) keep being handled gracefully without us claiming a server
+// failure to the user.
+const DUPLICATE_HINTS = [
+  "duplicate key",
+  "already exists",
+  "unique constraint",
+  "landing_waitlist_email",
+];
+
+const isDuplicateEmailError = (error: {
+  code?: string | null;
+  message?: string | null;
+  details?: string | null;
+}): boolean => {
+  if (error.code === "23505") return true;
+  const haystack = `${error.message ?? ""} ${error.details ?? ""}`.toLowerCase();
+  return DUPLICATE_HINTS.some((h) => haystack.includes(h));
+};
+
 function Field({
   label,
   required,
@@ -243,7 +287,13 @@ function Field({
   );
 }
 
-function SuccessCard({ onReset }: { onReset: () => void }) {
+function SuccessCard({
+  alreadyRegistered,
+  onReset,
+}: {
+  alreadyRegistered: boolean;
+  onReset: () => void;
+}) {
   return (
     <div
       role="status"
@@ -254,10 +304,15 @@ function SuccessCard({ onReset }: { onReset: () => void }) {
           <polyline points="20 6 9 17 4 12" />
         </svg>
       </span>
-      <h3 className="text-xl font-bold text-ink">Du bist auf der Warteliste.</h3>
+      <h3 className="text-xl font-bold text-ink">
+        {alreadyRegistered
+          ? "Du bist bereits auf der Warteliste."
+          : "Du bist auf der Warteliste."}
+      </h3>
       <p className="text-base leading-7 text-ink/70">
-        Wir melden uns, sobald deine Region und Rolle für den Early Access dran sind.
-        Bis dahin: erzähl Buddy weiter, wenn du jemanden kennst, der davon profitieren würde.
+        {alreadyRegistered
+          ? "Wir melden uns, sobald du dran bist."
+          : "Wir melden uns, sobald deine Region und Rolle für den Early Access dran sind. Bis dahin: erzähl Buddy weiter, wenn du jemanden kennst, der davon profitieren würde."}
       </p>
       <button
         type="button"
