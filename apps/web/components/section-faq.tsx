@@ -9,7 +9,7 @@ export const FAQ_ITEMS = [
   },
   {
     q: "Für wen ist Buddy gedacht?",
-    a: "Für alle, die spontan Hilfe in der Nähe brauchen — vom Möbelaufbau über kleine Reparaturen bis zum Umzug — und für Menschen, die im eigenen Viertel gegen ein faires Honorar helfen möchten.",
+    a: "Für alle, die spontan Unterstützung in der Nähe brauchen — bei Erledigungen, Transporten, kleinen Problemen im Haushalt oder Aufgaben, für die gerade niemand Zeit hat — und für Menschen, die im eigenen Viertel gegen ein faires Honorar helfen möchten.",
   },
   {
     q: "Wie funktioniert Buddy?",

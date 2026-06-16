@@ -100,7 +100,7 @@ export function SectionWaitlist() {
               Sei beim Early Access dabei.
             </h2>
             <p className="mt-5 text-lg leading-relaxed text-ink/70">
-              Buddy startet mit der ersten Testphase in Rosenheim und öffnet
+              Wir starten bewusst klein mit dem Rosenheim-Test und öffnen erst
               danach schrittweise weiter in Deutschland. Trage dich ein, wir
               melden uns, sobald deine Region und deine Rolle dran sind — kein
               Spam, ein Hinweis pro Phase.

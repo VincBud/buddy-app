@@ -4,7 +4,7 @@ export function SectionHero() {
       <div className="container-wide pb-20 pt-16 sm:pb-28 sm:pt-24">
         <p className="eyebrow mb-6">
           <span className="inline-block h-1.5 w-1.5 rounded-full bg-flame" />
-          MVP getestet · Test in Rosenheim · Early Access in Vorbereitung
+          MVP getestet · Rosenheim-Test in Vorbereitung · Early Access folgt
         </p>
 
         <h1 className="max-w-4xl text-display-1 text-ink">

@@ -98,7 +98,7 @@ const siteJsonLd = {
       alternateName: SITE_ALT_NAMES,
       url: SITE_URL,
       description:
-        "Buddy ist ein hyperlokaler Marktplatz für Alltagshilfe in Deutschland. Erste Testphase in Rosenheim, Early Access in Vorbereitung.",
+        "Buddy ist ein hyperlokaler Marktplatz für Alltagshilfe in Deutschland. Erste Testphase in Rosenheim und Early Access sind in Vorbereitung.",
       areaServed: { "@type": "Country", name: "Deutschland" },
       knowsLanguage: ["de"],
     },

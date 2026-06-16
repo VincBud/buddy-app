@@ -11,7 +11,7 @@ const ITEMS = [
     title: "Rosenheim-Test",
     state: "active",
     text:
-      "Erste Testphase in Rosenheim in Vorbereitung — Verifizierung, Support und Operations werden vor Ort ausgerollt.",
+      "Erste Testphase in Rosenheim in Vorbereitung — Verifizierung, Support und Operations werden für den Start vor Ort vorbereitet.",
   },
   {
     phase: "Phase 3",
@@ -33,10 +33,10 @@ export function SectionMvpStatus() {
           </h2>
           <p className="mt-5 text-lg leading-relaxed text-ink/70">
             Wir bauen Buddy aktuell mit einer kleinen Gruppe aus der Praxis
-            heraus, beginnend mit dem Rosenheim-Test. Was wir <em>nicht</em>{" "}
-            tun: blind skalieren oder einen App-Store-Launch versprechen. Was
-            wir tun: jeden Job verstehen, jeden Bug fixen, jede Wartelisten-Anmeldung
-            lesen.
+            heraus. Als nächsten Schritt steht der Rosenheim-Test an. Was wir
+            {" "}<em>nicht</em>{" "}tun: blind skalieren oder einen
+            App-Store-Launch versprechen. Was wir tun: jeden Job verstehen,
+            jeden Bug fixen, jede Wartelisten-Anmeldung lesen.
           </p>
         </div>
 

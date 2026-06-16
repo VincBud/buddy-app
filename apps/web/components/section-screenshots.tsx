@@ -83,7 +83,7 @@ export function SectionScreenshots() {
           </h2>
           <p className="mt-5 text-lg leading-relaxed text-ink/70">
             Der MVP wurde end-to-end getestet. Die Screens zeigen den aktuellen
-            Produktstand im Early Access.
+            Produktstand vor dem Rosenheim-Test.
           </p>
         </div>
 
