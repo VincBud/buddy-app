@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 844" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Buddy App – Auftrag abschließen und bewerten (Demo)">
+  <defs>
+    <linearGradient id="bg04" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FEFCFD"/>
+      <stop offset="100%" stop-color="#F4F2F7"/>
+    </linearGradient>
+    <linearGradient id="halo" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#6761A8" stop-opacity="0.22"/>
+      <stop offset="100%" stop-color="#6761A8" stop-opacity="0"/>
+    </linearGradient>
+    <style>
+      .t { font-family: system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; fill:#2A2D34; }
+      .muted { fill:#6B6E78; }
+      .label { font-size:11px; font-weight:700; letter-spacing:1.5px; }
+    </style>
+  </defs>
+
+  <rect width="390" height="844" fill="url(#bg04)"/>
+
+  <!-- status bar -->
+  <text x="32" y="32" class="t" font-size="14" font-weight="700">9:41</text>
+  <g transform="translate(316,22)" fill="#2A2D34">
+    <rect x="0" y="4" width="18" height="10" rx="2"/>
+    <rect x="22" y="4" width="22" height="10" rx="3" fill="none" stroke="#2A2D34" stroke-width="1.5"/>
+    <rect x="24" y="6" width="14" height="6" rx="1"/>
+  </g>
+
+  <!-- back -->
+  <text x="24" y="86" class="t muted" font-size="13">← Aufträge</text>
+
+  <!-- success halo + check -->
+  <circle cx="195" cy="200" r="120" fill="url(#halo)"/>
+  <circle cx="195" cy="200" r="64" fill="#6761A8"/>
+  <path d="M168 202 l18 18 l34 -36" stroke="#FEFCFD" stroke-width="6" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- headline -->
+  <text x="195" y="318" class="t" text-anchor="middle" font-size="24" font-weight="800">Auftrag abgeschlossen</text>
+  <text x="195" y="346" class="t muted" text-anchor="middle" font-size="14">Beidseitig bestätigt. Schön, dass es geklappt hat.</text>
+
+  <!-- Job summary -->
+  <g transform="translate(24,380)">
+    <rect x="0" y="0" width="342" height="76" rx="14" fill="#FFFFFF" stroke="#E9E7EC"/>
+    <rect x="14" y="14" width="48" height="48" rx="12" fill="#6761A8" opacity="0.12"/>
+    <text x="38" y="46" text-anchor="middle" font-size="20" font-weight="800" fill="#6761A8" font-family="system-ui,-apple-system,'Segoe UI',Roboto,sans-serif">📦</text>
+    <text x="76" y="32" class="t" font-size="14" font-weight="700">Hilfe beim Tragen eines Regals</text>
+    <text x="76" y="50" class="t muted" font-size="12">heute · mit Lena R. · 20 €</text>
+    <text x="76" y="66" class="t muted" font-size="11">Dauer 22 min · 2,1 km</text>
+  </g>
+
+  <!-- Rating -->
+  <text x="24" y="496" class="t label muted">WIE WAR’S MIT LENA?</text>
+  <g transform="translate(24,508)">
+    <rect x="0" y="0" width="342" height="68" rx="14" fill="#FFFFFF" stroke="#E9E7EC"/>
+    <g transform="translate(20,18)">
+      <text font-size="32" fill="#FF4000" font-family="system-ui,-apple-system,'Segoe UI',Roboto,sans-serif">
+        <tspan x="0" dy="26">★</tspan><tspan dx="14">★</tspan><tspan dx="14">★</tspan><tspan dx="14">★</tspan><tspan dx="14" fill="#E9E7EC">★</tspan>
+      </text>
+    </g>
+    <text x="322" y="44" class="t" text-anchor="end" font-size="18" font-weight="800">4 / 5</text>
+  </g>
+
+  <!-- Review textarea -->
+  <g transform="translate(24,604)">
+    <rect x="0" y="0" width="342" height="100" rx="14" fill="#FFFFFF" stroke="#E9E7EC"/>
+    <text x="20" y="32" class="t" font-size="14" font-weight="500">Sehr freundlich und pünktlich.</text>
+    <text x="20" y="54" class="t" font-size="14" font-weight="500">Würde Lena jederzeit wieder anfragen.</text>
+    <text x="322" y="86" class="t muted" text-anchor="end" font-size="11">Öffentlich auf Lenas Profil</text>
+  </g>
+
+  <!-- CTA -->
+  <rect x="24" y="734" width="342" height="58" rx="29" fill="#6761A8"/>
+  <text x="195" y="770" text-anchor="middle" font-size="16" font-weight="800" fill="#FEFCFD" font-family="system-ui,-apple-system,'Segoe UI',Roboto,sans-serif">Bewertung abschicken</text>
+
+  <!-- home indicator -->
+  <rect x="135" y="822" width="120" height="5" rx="2.5" fill="#2A2D34" opacity="0.2"/>
+</svg>

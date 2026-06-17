@@ -1,0 +1,79 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 390 844" preserveAspectRatio="xMidYMid slice" role="img" aria-label="Buddy App – Auftrag erstellen (Demo)">
+  <defs>
+    <linearGradient id="bg01" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#FEFCFD"/>
+      <stop offset="100%" stop-color="#F4F2F7"/>
+    </linearGradient>
+    <style>
+      .t { font-family: system-ui,-apple-system,'Segoe UI',Roboto,sans-serif; fill:#2A2D34; }
+      .muted { fill:#6B6E78; }
+      .label { font-size:11px; font-weight:700; letter-spacing:1.5px; }
+    </style>
+  </defs>
+
+  <rect width="390" height="844" fill="url(#bg01)"/>
+
+  <!-- status bar -->
+  <text x="32" y="32" class="t" font-size="14" font-weight="700">9:41</text>
+  <g transform="translate(316,22)" fill="#2A2D34">
+    <rect x="0" y="4" width="18" height="10" rx="2"/>
+    <rect x="22" y="4" width="22" height="10" rx="3" fill="none" stroke="#2A2D34" stroke-width="1.5"/>
+    <rect x="24" y="6" width="14" height="6" rx="1"/>
+  </g>
+
+  <!-- header -->
+  <text x="24" y="86" class="t muted" font-size="13">← Zurück</text>
+  <text x="24" y="124" class="t" font-size="26" font-weight="800">Auftrag erstellen</text>
+  <text x="24" y="148" class="t muted" font-size="13">Sag in einem Satz, was du brauchst.</text>
+
+  <!-- Was brauchst du? -->
+  <text x="24" y="190" class="t label muted">WAS BRAUCHST DU?</text>
+  <rect x="24" y="202" width="342" height="64" rx="14" fill="#FFFFFF" stroke="#E9E7EC"/>
+  <text x="40" y="240" class="t" font-size="16" font-weight="600">Hilfe beim Tragen eines Regals</text>
+
+  <!-- Kategorie -->
+  <text x="24" y="298" class="t label muted">KATEGORIE</text>
+  <g transform="translate(24,308)">
+    <rect x="0" y="0" width="68" height="36" rx="18" fill="#fff" stroke="#E9E7EC"/>
+    <text x="34" y="23" class="t" text-anchor="middle" font-size="13" font-weight="600">Umzug</text>
+    <rect x="76" y="0" width="84" height="36" rx="18" fill="#6761A8"/>
+    <text x="118" y="23" text-anchor="middle" font-size="13" font-weight="700" fill="#FEFCFD" font-family="system-ui,-apple-system,'Segoe UI',Roboto,sans-serif">Möbel ✓</text>
+    <rect x="168" y="0" width="76" height="36" rx="18" fill="#fff" stroke="#E9E7EC"/>
+    <text x="206" y="23" class="t" text-anchor="middle" font-size="13" font-weight="600">Garten</text>
+    <rect x="252" y="0" width="90" height="36" rx="18" fill="#fff" stroke="#E9E7EC"/>
+    <text x="297" y="23" class="t" text-anchor="middle" font-size="13" font-weight="600">Reparatur</text>
+  </g>
+
+  <!-- Wann toggle -->
+  <text x="24" y="392" class="t label muted">WANN?</text>
+  <rect x="24" y="404" width="342" height="44" rx="14" fill="#F4F2F7"/>
+  <rect x="28" y="408" width="112" height="36" rx="11" fill="#fff" stroke="#E9E7EC"/>
+  <text x="84" y="431" text-anchor="middle" font-size="13" font-weight="700" fill="#FF4000" font-family="system-ui,-apple-system,'Segoe UI',Roboto,sans-serif">Sofort</text>
+  <text x="206" y="431" class="t muted" text-anchor="middle" font-size="13" font-weight="600">Flexibel</text>
+  <text x="312" y="431" class="t muted" text-anchor="middle" font-size="13" font-weight="600">Termin</text>
+
+  <!-- Preis -->
+  <text x="24" y="494" class="t label muted">WIE VIEL IST ES DIR WERT?</text>
+  <rect x="24" y="506" width="342" height="76" rx="14" fill="#fff" stroke="#E9E7EC"/>
+  <text x="44" y="558" class="t" font-size="34" font-weight="800">25 €</text>
+  <text x="346" y="538" class="t muted" text-anchor="end" font-size="12">Empfohlen</text>
+  <text x="346" y="554" class="t" text-anchor="end" font-size="13" font-weight="600">20 – 30 €</text>
+
+  <!-- Radius -->
+  <text x="24" y="616" class="t label muted">RADIUS</text>
+  <g transform="translate(24,632)">
+    <line x1="0" y1="20" x2="342" y2="20" stroke="#E9E7EC" stroke-width="4" stroke-linecap="round"/>
+    <line x1="0" y1="20" x2="100" y2="20" stroke="#6761A8" stroke-width="4" stroke-linecap="round"/>
+    <circle cx="100" cy="20" r="11" fill="#6761A8"/>
+    <text x="0" y="52" class="t muted" font-size="12">3 km</text>
+    <text x="342" y="52" class="t muted" text-anchor="end" font-size="12">10 km</text>
+  </g>
+
+  <!-- CTA -->
+  <rect x="24" y="740" width="342" height="60" rx="30" fill="#FF4000"/>
+  <text x="195" y="778" text-anchor="middle" font-size="17" font-weight="800" fill="#FEFCFD" font-family="system-ui,-apple-system,'Segoe UI',Roboto,sans-serif">Auftrag posten</text>
+  <text x="324" y="778" text-anchor="middle" font-size="18" font-weight="800" fill="#FEFCFD" font-family="system-ui,-apple-system,'Segoe UI',Roboto,sans-serif">→</text>
+
+  <!-- home indicator -->
+  <rect x="135" y="822" width="120" height="5" rx="2.5" fill="#2A2D34" opacity="0.2"/>
+</svg>

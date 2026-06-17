@@ -34,7 +34,6 @@ export function SectionWaitlist() {
   const [status, setStatus] = useState<Status>({ kind: "idle" });
 
   const isSubmitting = status.kind === "submitting";
-  const isSuccess = status.kind === "success";
 
   const onSubmit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault();

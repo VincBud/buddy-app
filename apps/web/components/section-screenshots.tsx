@@ -1,30 +1,27 @@
 import fs from "node:fs";
 import path from "node:path";
-import Image from "next/image";
 
 // ── Where to drop the real assets ───────────────────────────────────────────
 //
-//   apps/web/public/screenshots/01-problem-posten.png
-//   apps/web/public/screenshots/02-buddy-auswaehlen.png
-//   apps/web/public/screenshots/03-chat-oeffnen.png
-//   apps/web/public/screenshots/04-auftrag-abschliessen.png
+//   apps/web/public/screenshots/01-problem-posten.{svg,png}
+//   apps/web/public/screenshots/02-buddy-auswaehlen.{svg,png}
+//   apps/web/public/screenshots/03-chat-oeffnen.{svg,png}
+//   apps/web/public/screenshots/04-auftrag-abschliessen.{svg,png}
 //
-// Suggested format: portrait PNG, 1170×2532 (iPhone 15 Pro) or any other
-// 9:19.5-ish aspect ratio. Files must contain DEMO DATA only — no real
-// names, e-mails, addresses, phone numbers, chat content, Supabase IDs,
-// payment details or debug overlays.
+// We ship hand-crafted SVG mockups today (brand-consistent, vector-sharp,
+// ~5 KB each). The resolver prefers .svg, falling back to .png so a future
+// rasterised export from a real device can drop in with the same basename
+// and automatically take over on the next build.
 //
-// Until the files exist, each card renders a stylised placeholder so the
-// build stays green and the section still looks intentional. As soon as a
-// PNG with the matching filename appears in /public/screenshots/, the next
-// build swaps the placeholder for the real screenshot automatically — no
-// code changes required.
+// Files must contain DEMO DATA only — no real names, e-mails, addresses,
+// phone numbers, chat content, Supabase IDs, payment details or debug
+// overlays.
 
 type Slide = {
   n: string;            // "01" .. "04"
   caption: string;      // visible label under the phone
   alt: string;          // alt text once the real image is in place
-  file: string;         // expected filename inside /public/screenshots/
+  base: string;         // file basename (without extension) under /public/screenshots/
 };
 
 const SLIDES: readonly Slide[] = [
@@ -32,40 +29,47 @@ const SLIDES: readonly Slide[] = [
     n: "01",
     caption: "Problem posten",
     alt: "Buddy App — Bildschirm zum Erstellen eines neuen Hilfe-Auftrags mit Preis und Radius (Demo-Daten).",
-    file: "01-problem-posten.png",
+    base: "01-problem-posten",
   },
   {
     n: "02",
     caption: "Buddy auswählen",
     alt: "Buddy App — Übersicht eingehender Bewerbungen mit Profil, Bewertungen und Preis zur Auswahl eines Buddys (Demo-Daten).",
-    file: "02-buddy-auswaehlen.png",
+    base: "02-buddy-auswaehlen",
   },
   {
     n: "03",
     caption: "Chat öffnen",
     alt: "Buddy App — Direkter Chat zwischen Auftraggeber:in und ausgewähltem Buddy nach erfolgter Annahme (Demo-Daten).",
-    file: "03-chat-oeffnen.png",
+    base: "03-chat-oeffnen",
   },
   {
     n: "04",
     caption: "Auftrag abschließen",
     alt: "Buddy App — Beidseitige Bestätigung und gegenseitige Bewertung nach abgeschlossenem Auftrag (Demo-Daten).",
-    file: "04-auftrag-abschliessen.png",
+    base: "04-auftrag-abschliessen",
   },
 ] as const;
 
-// next/image will 404 if the file is missing; rather than risk an ugly broken
-// image at runtime we resolve the existence ONCE at server-render time and
-// branch the JSX. This runs on the build server during static generation, so
-// there is no per-request cost.
+// Resolve the asset extension ONCE at server-render time (build-time for
+// static prerender) so we never serve a broken `<img>` and we never need
+// `next/image` SVG flags. Returns the public path or null when neither
+// extension exists, in which case the card falls back to a styled
+// placeholder.
 const SCREENSHOTS_DIR = path.join(process.cwd(), "public", "screenshots");
+const RESOLVE_ORDER = [".svg", ".png"] as const;
 
-const fileExists = (filename: string): boolean => {
-  try {
-    return fs.existsSync(path.join(SCREENSHOTS_DIR, filename));
-  } catch {
-    return false;
+const resolveAssetPath = (base: string): string | null => {
+  for (const ext of RESOLVE_ORDER) {
+    try {
+      if (fs.existsSync(path.join(SCREENSHOTS_DIR, `${base}${ext}`))) {
+        return `/screenshots/${base}${ext}`;
+      }
+    } catch {
+      /* fall through */
+    }
   }
+  return null;
 };
 
 export function SectionScreenshots() {
@@ -82,8 +86,9 @@ export function SectionScreenshots() {
             Ein erster Blick in den Buddy MVP.
           </h2>
           <p className="mt-5 text-lg leading-relaxed text-ink/70">
-            Der MVP wurde end-to-end getestet. Die Screens zeigen den aktuellen
-            Produktstand vor dem Rosenheim-Test.
+            Der MVP wurde end-to-end getestet. Die folgenden Screens zeigen
+            beispielhafte Ansichten aus dem aktuellen Produktstand vor dem
+            Rosenheim-Test.
           </p>
         </div>
 
@@ -105,7 +110,7 @@ export function SectionScreenshots() {
 // ── Card ─────────────────────────────────────────────────────────────────────
 
 function ScreenshotCard({ slide }: { slide: Slide }) {
-  const hasImage = fileExists(slide.file);
+  const assetPath = resolveAssetPath(slide.base);
 
   return (
     <li className="group flex flex-col">
@@ -114,17 +119,19 @@ function ScreenshotCard({ slide }: { slide: Slide }) {
         <div className="relative overflow-hidden rounded-[2rem] border border-mist bg-gradient-to-b from-ink/[0.04] to-ink/[0.10] shadow-card transition group-hover:shadow-flame">
           {/* Aspect-ratio shell roughly matching iPhone portrait */}
           <div className="relative w-full" style={{ paddingTop: `${(2532 / 1170) * 100}%` }}>
-            <PhonePlaceholder n={slide.n} caption={slide.caption} />
-
-            {hasImage && (
-              <Image
-                src={`/screenshots/${slide.file}`}
+            {assetPath ? (
+              // Plain <img>: our SVG mockups are first-party, optimisation
+              // would add nothing measurable, and next/image's SVG handling
+              // is opt-in via dangerouslyAllowSVG which we want to avoid.
+              <img
+                src={assetPath}
                 alt={slide.alt}
-                fill
-                sizes="(max-width: 640px) 80vw, (max-width: 1024px) 40vw, 280px"
+                loading={slide.n === "01" ? "eager" : "lazy"}
+                decoding="async"
                 className="absolute inset-0 h-full w-full object-cover"
-                priority={slide.n === "01"}
               />
+            ) : (
+              <PhonePlaceholder n={slide.n} caption={slide.caption} />
             )}
 
             {/* Subtle inner bezel + status-bar notch hint */}
