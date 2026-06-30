@@ -1,4 +1,4 @@
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { type Href, useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useMemo, useState } from 'react';
 import {
     Alert,
@@ -179,6 +179,21 @@ export default function ChatDetailsScreen() {
   );
   const currentUserRole = normalizeRoleParam(params.currentUserRole);
   const requesterInitial = requesterName.charAt(0).toUpperCase();
+
+  // Trust & Safety: report the counterparty (never the current user).
+  // Creator (auftraggeber) reports the assigned buddy; buddy reports the creator.
+  const reportedUserId =
+    currentUserRole === 'auftraggeber' ? job?.assignedBuddyId : job?.requesterId;
+
+  const handleReportUser = () => {
+    if (!reportedUserId) return;
+    router.push({
+      // Cast: expo-router regenerates the '/report' typed route on the next
+      // dev-server run; the route exists at app/report.tsx.
+      pathname: '/report',
+      params: { targetType: 'user', reportedUserId },
+    } as unknown as Href);
+  };
 
   const description =
     job?.description?.trim() ||
@@ -581,6 +596,15 @@ export default function ChatDetailsScreen() {
               <Text style={styles.reportActionText}>{i18n.t('chat.report_issue')}</Text>
             </Pressable>
           </View>
+          {reportedUserId && (
+            <Pressable
+              style={({ pressed }) => [styles.reportUserButton, pressed && styles.actionButtonPressed]}
+              onPress={handleReportUser}
+              hitSlop={6}
+            >
+              <Text style={styles.reportUserText}>{i18n.t('report.titles.user')}</Text>
+            </Pressable>
+          )}
         </View>
       </ScrollView>
 
@@ -1210,6 +1234,16 @@ const styles = StyleSheet.create({
   reportActionText: {
     ...typography.meta,
     color: colors.textSecondary,
+  },
+  reportUserButton: {
+    alignSelf: 'flex-start',
+    marginTop: spacing.md,
+    paddingVertical: spacing.xs,
+  },
+  reportUserText: {
+    ...typography.meta,
+    color: colors.textSecondary,
+    textDecorationLine: 'underline',
   },
   primaryActionButton: {
     alignSelf: 'flex-start',
