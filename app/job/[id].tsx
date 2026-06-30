@@ -1,4 +1,4 @@
-import { router, Stack, useLocalSearchParams, useFocusEffect } from 'expo-router';
+import { type Href, router, Stack, useLocalSearchParams, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
     Alert,
@@ -703,6 +703,23 @@ export default function JobDetailScreen() {
     </View>
   );
 
+  // Trust & Safety report entry point (distinct from the reportJobIssue
+  // dispute/"Problem melden" flow). Routes to the shared report modal.
+  const renderReportLink = (currentJob: Job) => (
+    <Pressable
+      style={({ pressed }) => [styles.reportJobLink, pressed && styles.reportJobLinkPressed]}
+      // Cast: the expo-router typed-routes file regenerates '/report' on the
+      // next dev-server run; the route already exists at app/report.tsx.
+      onPress={() => router.push({
+        pathname: '/report',
+        params: { targetType: 'job', jobId: currentJob.id },
+      } as unknown as Href)}
+      hitSlop={8}
+    >
+      <Text style={styles.reportJobLinkText}>{i18n.t('report.titles.job')}</Text>
+    </Pressable>
+  );
+
   const renderHeroCard = (currentJob: Job, showRewardLine: boolean) => (
     <View style={styles.heroCard}>
       <View style={styles.heroTopRow}>
@@ -1083,6 +1100,7 @@ export default function JobDetailScreen() {
             </Text>
           </Pressable>
         </View>
+        {renderReportLink(currentJob)}
       </ScrollView>
 
       <Modal
@@ -1322,6 +1340,7 @@ export default function JobDetailScreen() {
           </Text>
         </>
       )}
+      {renderReportLink(currentJob)}
     </ScrollView>
   );
 
@@ -1469,6 +1488,20 @@ const styles = StyleSheet.create({
   },
   headerSpacer: {
     width: 40,
+  },
+  reportJobLink: {
+    alignSelf: 'center',
+    marginTop: spacing.lg,
+    marginBottom: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  reportJobLinkPressed: { opacity: 0.6 },
+  reportJobLinkText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.textSecondary,
+    textDecorationLine: 'underline',
   },
   centeredContainer: {
     flex: 1,
