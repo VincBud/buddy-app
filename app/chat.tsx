@@ -1,7 +1,8 @@
 import * as ImagePicker from 'expo-image-picker';
-import { Stack, useLocalSearchParams, useRouter } from 'expo-router';
+import { type Href, Stack, useLocalSearchParams, useRouter } from 'expo-router';
 import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import {
+  Alert,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -333,6 +334,30 @@ export default function ChatScreen() {
     if (!jobContext.jobId) return;
     router.push({ pathname: '/chat-details/[id]', params: { id: jobContext.jobId, currentUserRole, fromChat: 'true' } });
   };
+
+  // Trust & Safety: long-press a counterpart's persisted message to report it.
+  // Distinct from the openJobDispute "Problem melden" dispute flow. Own and
+  // not-yet-sent messages are not reportable (see the onLongPress gate below).
+  const handleMessageLongPress = useCallback((messageId: string) => {
+    if (!jobId) return;
+    Alert.alert(
+      i18n.t('report.message_sheet_title'),
+      undefined,
+      [
+        {
+          text: i18n.t('report.titles.message'),
+          style: 'destructive',
+          onPress: () => router.push({
+            // Cast: expo-router regenerates the '/report' typed route on the
+            // next dev-server run; the route exists at app/report.tsx.
+            pathname: '/report',
+            params: { targetType: 'message', messageId, jobId },
+          } as unknown as Href),
+        },
+        { text: i18n.t('report.cancel'), style: 'cancel' },
+      ],
+    );
+  }, [jobId, router]);
 
   // Single data load — replaces the previous split loadJobContext + loadJobStatus
   // that each called loadJobs() independently, causing two parallel Supabase fetches.
@@ -916,7 +941,7 @@ export default function ChatScreen() {
                   : styles.messageWrapperLeft,
               ]}
             >
-              <View
+              <Pressable
                 style={[
                   styles.messageBubble,
                   message.type === 'image' && styles.imageMessageBubble,
@@ -924,6 +949,17 @@ export default function ChatScreen() {
                     ? styles.auftraggeberMessage
                     : styles.buddyMessage,
                 ]}
+                // Only the counterpart's already-persisted messages can be
+                // reported (own / sending / failed messages have no reportable
+                // server row, and self-reports are rejected by the backend).
+                onLongPress={
+                  message.sender === 'other' &&
+                  message.status !== 'sending' &&
+                  message.status !== 'failed'
+                    ? () => handleMessageLongPress(message.id)
+                    : undefined
+                }
+                delayLongPress={350}
               >
                 {message.type === 'image' && message.imageUri ? (
                   <ChatMessageImage uri={message.imageUri} />
@@ -939,7 +975,7 @@ export default function ChatScreen() {
                     {message.text}
                   </Text>
                 )}
-              </View>
+              </Pressable>
 
               {!groupedWithPrevious && (
                 <Text style={styles.timestamp}>{message.timestamp}</Text>

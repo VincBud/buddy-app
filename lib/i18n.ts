@@ -742,6 +742,8 @@ const translations = {
         general: 'Wie können wir dir helfen? Beschreib dein Anliegen.',
       },
       reason_label: 'Grund',
+      message_sheet_title: 'Nachricht',
+      cancel: 'Abbrechen',
       reasons: {
         harassment: 'Belästigung oder Bedrohung',
         scam_fraud: 'Betrug oder Abzocke',
@@ -1523,6 +1525,8 @@ const translations = {
         general: 'How can we help? Describe your request.',
       },
       reason_label: 'Reason',
+      message_sheet_title: 'Message',
+      cancel: 'Cancel',
       reasons: {
         harassment: 'Harassment or threats',
         scam_fraud: 'Scam or fraud',
