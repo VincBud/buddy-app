@@ -5,7 +5,7 @@ import {
 } from '@/lib/wallet';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
-import { router, useFocusEffect } from 'expo-router';
+import { type Href, router, useFocusEffect } from 'expo-router';
 import { useCallback, useState } from 'react';
 import { Image, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -829,7 +829,18 @@ export default function ProfileScreen() {
           <Text style={styles.settingChevron}>›</Text>
         </Pressable>
 
-        <Pressable style={styles.settingRow}>
+        <Pressable
+          style={styles.settingRow}
+          // General support is intentionally reachable for everyone (incl.
+          // unverified / blocked users) — the report modal's 'general' target
+          // is not gated by identity verification.
+          onPress={() => router.push({
+            // Cast: expo-router regenerates the '/report' typed route on the
+            // next dev-server run; the route exists at app/report.tsx.
+            pathname: '/report',
+            params: { targetType: 'general' },
+          } as unknown as Href)}
+        >
           <Text style={styles.settingText}>{i18n.t('profile.support')}</Text>
           <Text style={styles.settingChevron}>›</Text>
         </Pressable>
