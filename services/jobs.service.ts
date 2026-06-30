@@ -497,7 +497,7 @@ export const getJobById = async (id: string, _userId?: string): Promise<Job | nu
   return jobs.find((j) => String(j.id) === String(id)) ?? null;
 };
 
-export const upsertJob = async (job: Job, _userId?: string): Promise<Job[]> => {
+export const upsertJob = async (job: Job, _userId?: string): Promise<{ jobs: Job[]; jobId: string }> => {
   const t0 = Date.now();
   // Sync to Supabase; for new jobs (timestamp id) we get back the real UUID.
   // Skip remote sync when the active session is not the job owner — those
@@ -540,7 +540,10 @@ export const upsertJob = async (job: Job, _userId?: string): Promise<Job[]> => {
   await saveLocalJobs(next);
   invalidateLoadJobsCache();
   debugLog(`[jobs.service] upsertJob job=${canonicalId} total ${Date.now() - t0}ms`);
-  return next;
+  // jobId is the canonical Supabase UUID for new jobs (promoted from the local
+  // timestamp id during sync). Callers that must reference the server row —
+  // e.g. set_job_location — need this, not the temporary client id.
+  return { jobs: next, jobId: canonicalId };
 };
 
 export const deleteJob = async (id: string, _userId?: string): Promise<Job[]> => {

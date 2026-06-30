@@ -23,6 +23,7 @@ import { getActiveUserId } from '../../lib/auth';
 import { useCurrentUser } from '../../lib/current-user';
 import { CATEGORY_META, computeExpiresAt, Job, JOB_CATEGORIES, JobCategory, JobRebooking, TimeMode } from '../../lib/jobs';
 import { upsertJob } from '../../services/jobs.service';
+import { setJobLocation } from '../../services/geo.service';
 import { uploadMedia } from '../../services/media.service';
 import { addNotification } from '../../services/notifications.service';
 import { createInitialPaymentState } from '../../lib/payments';
@@ -38,6 +39,10 @@ import {
 } from '../../lib/pricing';
 import { layout, spacing } from '../../lib/spacing';
 import { typography } from '../../lib/typography';
+
+// New jobs start with a local timestamp id and are promoted to a Supabase UUID
+// on sync; only the UUID can be referenced by set_job_location().
+const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export default function CreateScreen() {
   useLanguage();
@@ -375,10 +380,10 @@ export default function CreateScreen() {
       appointmentDate: formattedDate,
       appointmentTime: formattedTime,
       media: remoteMedia,
-      location: {
-        lat: 47.856,
-        lng: 12.128,
-      },
+      // Exact coordinates are NOT stored in the world-readable job payload.
+      // They are written separately to the private job_locations side-table via
+      // set_job_location() after the job is created (see below). The server adds
+      // a coarse payload.location_summary; the client stores no lat/lng.
       status: 'open',
       expiresAt: computeExpiresAt(selectedTime ?? undefined, formattedDate, formattedTime),
       rebooking: rebookingMeta,
@@ -387,8 +392,31 @@ export default function CreateScreen() {
     // TODO(rate-limit): enforce per-user job creation rate limit (e.g. 5 active jobs or 10/day) before upsertJob.
     try {
       const tUpsert = Date.now();
-      await upsertJob(newJob);
-      debugLog(`[create] handleSubmit: upsertJob done (${Date.now() - tUpsert}ms)`);
+      const { jobId } = await upsertJob(newJob);
+      debugLog(`[create] handleSubmit: upsertJob done id=${jobId} (${Date.now() - tUpsert}ms)`);
+
+      // Record the job's location via the secure RPC (writes exact coordinates
+      // to the private job_locations table; the world-readable payload only gets
+      // a coarse summary). We block success navigation on this: a job without a
+      // location row will not surface in the upcoming nearby feed (Geo Phase 3).
+      // Skipped for local-only/offline jobs whose id was never promoted to a UUID.
+      // TODO(geo-2c): replace these hardcoded Rosenheim test coordinates with a
+      // real device GPS fix (expo-location) or manual map/postal-code selection.
+      if (UUID_REGEX.test(jobId)) {
+        const geoOutcome = await setJobLocation({
+          jobId,
+          lat: 47.8560,
+          lng: 12.1280,
+          geoPrecision: 'exact',
+          city: 'Rosenheim',
+          postalCode: '83022',
+        });
+        if (!geoOutcome.ok) {
+          console.warn(`[create] set_job_location failed: code=${geoOutcome.code} job=${jobId}`);
+          setErrorToast(i18n.t('create.location_error'));
+          return; // keep the form; do not navigate without a location row
+        }
+      }
 
       // Non-critical follow-ups run in the background so we can navigate immediately.
       void incrementReliabilityStats(getActiveUserId(), 'totalPostedJobs').catch((e) =>
