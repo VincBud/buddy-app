@@ -10,6 +10,7 @@ import { debugLog } from '../../lib/config/debug';
 import i18n, { useLanguage } from '../../lib/i18n';
 import { completeJob as completeJobAction, isJobChatAccessible } from '../../lib/job-actions';
 import { loadJobs as loadJobsService, saveJobs as saveJobsService } from '../../services/jobs.service';
+import { fetchNearbyOpenJobs } from '../../services/geo.service';
 import { getBuddyScore, setBuddyScore } from '../../services/user.service';
 import { getActiveUserId } from '../../lib/auth';
 import {
@@ -17,7 +18,6 @@ import {
     getActiveOwnJobs,
     getBuddyPointsForJob,
     isActiveJobStatus,
-    isJobOpenForApplications,
     Job,
     JobCategory,
 } from '../../lib/jobs';
@@ -53,31 +53,10 @@ type EmptyStateConfig = {
   supportsRadiusExpansion?: boolean;
 };
 
-const USER_LOCATION = {
-  lat: 47.856,
-  lng: 12.128,
-};
-
-const getDistance = (
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number
-) => {
-  const R = 6371;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-};
+// Geo-Matching: proximity is now computed server-side by the nearby_open_jobs
+// RPC. The old hardcoded USER_LOCATION + client-side haversine over
+// payload.location have been removed — open jobs carry a server-provided
+// job.distanceKm instead.
 
 // ─── FeedMediaImage ────────────────────────────────────────────────────────────
 // Wraps the job-card media thumbnail with onLoad/onError diagnostics and a
@@ -185,15 +164,10 @@ export default function FeedScreen() {
     return (job.category ?? inferJobCategory(job)) as JobCategory;
   };
 
-  const getDistanceValue = (job: Job): number => {
-    if (!job.location) return Number.POSITIVE_INFINITY;
-    return getDistance(
-      USER_LOCATION.lat,
-      USER_LOCATION.lng,
-      job.location.lat,
-      job.location.lng
-    );
-  };
+  // Distance now comes from the nearby_open_jobs RPC (open jobs only). Jobs
+  // without a server-provided distance (e.g. accepted/archived tabs) sort last.
+  const getDistanceValue = (job: Job): number =>
+    job.distanceKm ?? Number.POSITIVE_INFINITY;
 
   const getCategoryMatchScore = (
     job: Job,
@@ -242,23 +216,32 @@ export default function FeedScreen() {
 
       const parsedRadius = loadedUserPreferences.radius;
 
-      const filteredOpenJobs = safeJobs.filter((job: Job) => {
-        // Only 'open' jobs appear in the public feed; matched/active/completed/cancelled/expired do not
-        if (!isJobOpenForApplications(job.status)) return false;
-        if (job.requesterId === getActiveUserId()) return false;
-        // Exclude jobs the active dev user has already applied to
-        if (job.match?.applications?.some((a) => a.buddyId === getActiveUserId())) return false;
-        if (!job.location) return true;
-
-        return getDistance(
-          USER_LOCATION.lat,
-          USER_LOCATION.lng,
-          job.location.lat,
-          job.location.lng
-        ) <= parsedRadius;
+      // Open feed: server-side proximity via the nearby_open_jobs RPC. The RPC
+      // already filters to open jobs, excludes the caller's own + already-applied
+      // jobs, and bounds the radius — so no client-side haversine/payload.location.
+      // TODO(geo-2c/4): replace this hardcoded Rosenheim origin with a real
+      // device GPS fix or the user's saved profile location.
+      const nearbyOutcome = await fetchNearbyOpenJobs({
+        lat: 47.8560,
+        lng: 12.1280,
+        radiusKm: parsedRadius,
       });
+      let nearbyOpenJobs: Job[] = [];
+      if (nearbyOutcome.ok) {
+        nearbyOpenJobs = nearbyOutcome.jobs;
+      } else {
+        console.warn(`[feed] nearby_open_jobs failed: code=${nearbyOutcome.code}`);
+        setToast({
+          message: isEnglish
+            ? 'Could not load nearby jobs. Pull to refresh.'
+            : 'Jobs in der Nähe konnten nicht geladen werden. Zum Aktualisieren ziehen.',
+          variant: 'error',
+        });
+      }
 
-      const sortedOpenJobs = filteredOpenJobs.sort((a, b) => {
+      // Keep the existing relevance ordering (category match → price → distance)
+      // on top of the RPC's distance-sorted result.
+      const sortedOpenJobs = [...nearbyOpenJobs].sort((a, b) => {
         const prefA = getCategoryMatchScore(a, loadedUserPreferences);
         const prefB = getCategoryMatchScore(b, loadedUserPreferences);
         if (prefA !== prefB) return prefB - prefA;
@@ -271,7 +254,7 @@ export default function FeedScreen() {
         const distB = getDistanceValue(b);
         if (distA !== distB) return distA - distB;
 
-        return Number(b.id) - Number(a.id);
+        return (b.createdAt ?? '').localeCompare(a.createdAt ?? '');
       });
 
       // Accepted tab: only jobs the local buddy is the selected applicant on,
@@ -413,21 +396,12 @@ export default function FeedScreen() {
       ? acceptedJobs
       : archivedJobs;
 
-  const hasOpenJobsOutsideRadius = useMemo(() => {
-    return allJobs.some((job) => {
-      if (job.status !== 'open') return false;
-      if (!job.location) return false;
-
-      const distance = getDistance(
-        USER_LOCATION.lat,
-        USER_LOCATION.lng,
-        job.location.lat,
-        job.location.lng
-      );
-
-      return Number.isFinite(distance) && distance > buddyRadius;
-    });
-  }, [allJobs, buddyRadius]);
+  // The nearby RPC only returns jobs WITHIN the radius, so the client can no
+  // longer tell whether open jobs exist beyond it. Disabled until a coarse
+  // server-side count is added (geo phase 4); the empty state falls back to its
+  // generic copy.
+  // TODO(geo-4): surface an out-of-radius hint via a server count.
+  const hasOpenJobsOutsideRadius = false;
 
   const getEmptyStateConfig = (): EmptyStateConfig => {
     if (activeTab === 'offen') {
@@ -541,14 +515,9 @@ export default function FeedScreen() {
   };
 
   const getCombinedDistanceDisplay = (job: Job): string => {
-    if (!job.location) return i18n.t('common.nearby');
+    if (job.distanceKm == null) return i18n.t('common.nearby');
 
-    const distanceKm = getDistance(
-      USER_LOCATION.lat,
-      USER_LOCATION.lng,
-      job.location.lat,
-      job.location.lng
-    );
+    const distanceKm = job.distanceKm;
 
     if (distanceKm < 1) {
       return '<1 km';
@@ -774,7 +743,7 @@ export default function FeedScreen() {
         )}
 
         <View style={styles.metaChipsRow}>
-          {job.location && (
+          {job.distanceKm != null && (
             <View style={styles.metaChip}>
               <Text style={styles.metaChipText}>
                 📍 {getCombinedDistanceDisplay(job)}

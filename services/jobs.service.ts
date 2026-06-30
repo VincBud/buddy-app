@@ -60,7 +60,7 @@ const isUUID = (s: string): boolean => UUID_REGEX.test(s);
 // description, price, time_mode, radius_km are promoted convenience columns
 // (NOT NULL in the deployed schema) AND are mirrored in payload jsonb.
 // Payload remains the authoritative source for frontend hydration.
-type JobRow = {
+export type JobRow = {
   id: string;
   creator_id: string;
   title: string;
@@ -110,7 +110,7 @@ const buildPayload = (job: Job): Record<string, unknown> => ({
 
 // Hydrate a Job from a Supabase row. All content fields come from payload jsonb.
 // title is the only promoted text column (used as search/display convenience).
-const rowToJob = (row: JobRow): Job => {
+export const rowToJob = (row: JobRow): Job => {
   const p: Record<string, unknown> = row.payload ?? {};
   return {
     id: row.id,

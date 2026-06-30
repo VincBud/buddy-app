@@ -191,6 +191,12 @@ export type Job = {
     lat: number;
     lng: number;
   };
+  // Geo-matching display fields, populated only by the nearby_open_jobs RPC.
+  // Coarse/derived only — the client never receives raw coordinates.
+  distanceKm?: number;
+  city?: string;
+  postalCode?: string;
+  geoPrecision?: 'exact' | 'approx' | 'manual';
   status: JobStatus;
   match?: JobMatchState;
   marketSignals?: JobMarketSignals;
