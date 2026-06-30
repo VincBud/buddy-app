@@ -678,8 +678,14 @@ const translations = {
     },
     verification: {
       eyebrow: 'Identitätsprüfung',
-      headline: 'Bestätige deine Identität',
-      subline: 'Buddy verbindet echte Menschen. Eine kurze Verifizierung mit Ausweis und Selfie sorgt dafür, dass alle sicher zusammenarbeiten.',
+      headline: 'Sicher verifizieren',
+      subline: 'Damit Buddy vertrauenswürdig bleibt, verifizieren wir jede Person einmalig per Ausweis und Selfie.',
+      benefits: {
+        real_people: 'Echte Menschen statt Fake-Profile',
+        nearby_safety: 'Mehr Sicherheit bei Aufträgen in deiner Nähe',
+        protection: 'Schutz für Auftraggeber und Helfer',
+        required: 'Verifizierung ist Pflicht, bevor du Buddy nutzen kannst',
+      },
       polling: 'Wir warten auf die Bestätigung von Persona…',
       status: {
         not_started: 'Nicht gestartet',
@@ -699,7 +705,9 @@ const translations = {
       },
       cta: {
         start: 'Verifizierung starten',
+        resume: 'Verifizierung fortsetzen',
         retry: 'Erneut versuchen',
+        restart: 'Neu starten',
         check_again: 'Status aktualisieren',
         approved: 'Bestätigt',
         starting: 'Verifizierung wird vorbereitet…',
@@ -1388,8 +1396,14 @@ const translations = {
     },
     verification: {
       eyebrow: 'Identity verification',
-      headline: 'Confirm your identity',
-      subline: 'Buddy connects real people. A short ID + selfie check keeps everyone safe.',
+      headline: 'Verify securely',
+      subline: 'To keep Buddy trustworthy, we verify every person once with an ID and a selfie.',
+      benefits: {
+        real_people: 'Real people instead of fake profiles',
+        nearby_safety: 'More safety for jobs near you',
+        protection: 'Protection for clients and helpers',
+        required: 'Verification is required before you can use Buddy',
+      },
       polling: 'Waiting for Persona to confirm…',
       status: {
         not_started: 'Not started',
@@ -1409,7 +1423,9 @@ const translations = {
       },
       cta: {
         start: 'Start verification',
+        resume: 'Resume verification',
         retry: 'Try again',
+        restart: 'Start over',
         check_again: 'Refresh status',
         approved: 'Verified',
         starting: 'Preparing verification…',

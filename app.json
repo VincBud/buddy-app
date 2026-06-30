@@ -1,7 +1,7 @@
 {
   "expo": {
     "name": "buddy-app",
-    "slug": "buddy-app",
+    "slug": "buddy",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/images/icon.png",
@@ -47,6 +47,13 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
-    }
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "c23b19ae-3b35-4cdb-84d0-c8fb357c8f26"
+      }
+    },
+    "owner": "vincbuds-organization"
   }
 }

@@ -56,12 +56,8 @@ export default function IdentityVerificationScreen() {
   }, [refresh]);
 
   const onStart = useCallback(async () => {
-    const mapError = (key: string) => {
-      console.log('[IDENTITY_VERIFICATION] mapped error key →', key);
-      setErrorKey(key);
-    };
+    const mapError = (key: string) => setErrorKey(key);
     try {
-      console.log('[IDENTITY_VERIFICATION] onStart pressed');
       setErrorKey(null);
       setCooldownSeconds(0);
       setPhase('launching');
@@ -71,21 +67,18 @@ export default function IdentityVerificationScreen() {
       // this runtime. Without this gate, hitting "Start" inside Expo Go
       // would still create an inquiry on Persona's side that we could never
       // open, and would consume one of the user's daily retry attempts.
-      const sdkAvailable = isPersonaSdkAvailable();
-      console.log('[IDENTITY_VERIFICATION] preflight isPersonaSdkAvailable() =', sdkAvailable);
-      if (!sdkAvailable) {
-        console.log('[IDENTITY_VERIFICATION] skipping create-persona-inquiry: SDK unavailable');
+      if (!isPersonaSdkAvailable()) {
+        console.warn('[IDENTITY_VERIFICATION] Persona SDK unavailable — not creating inquiry');
         setPhase('error');
         mapError('verification.errors.sdk_unavailable');
         return;
       }
 
-      console.log('[IDENTITY_VERIFICATION] calling startVerificationInquiry()…');
+      // For pending/rejected/expired this resumes the existing inquiry
+      // (reused === true) rather than creating a duplicate one.
       const outcome = await startVerificationInquiry();
-      console.log('[IDENTITY_VERIFICATION] startVerificationInquiry outcome:', JSON.stringify(outcome, null, 2));
 
       if (!outcome.ok) {
-        console.log('[IDENTITY_VERIFICATION] outcome.ok = false, error.kind =', outcome.error.kind);
         setPhase('error');
         switch (outcome.error.kind) {
           case 'not_authenticated':
@@ -100,8 +93,8 @@ export default function IdentityVerificationScreen() {
             break;
           case 'server_error':
           default:
-            console.log('[IDENTITY_VERIFICATION] server_error detail:',
-              'detail' in outcome.error ? outcome.error.detail : '(none)');
+            console.error('[IDENTITY_VERIFICATION] start inquiry failed:',
+              'detail' in outcome.error ? outcome.error.detail : outcome.error.kind);
             mapError('verification.errors.server');
             break;
         }
@@ -109,17 +102,9 @@ export default function IdentityVerificationScreen() {
       }
 
       const { result } = outcome;
-      console.log('[IDENTITY_VERIFICATION] inquiry_id     =', result.inquiryId);
-      console.log('[IDENTITY_VERIFICATION] reference_id   =', result.referenceId);
-      console.log('[IDENTITY_VERIFICATION] status         =', result.status);
-      console.log('[IDENTITY_VERIFICATION] session_token  =',
-        result.sessionToken ? `present (len=${result.sessionToken.length})` : 'null');
-      console.log('[IDENTITY_VERIFICATION] reused         =', result.reused);
-      console.log('[IDENTITY_VERIFICATION] retry_count    =', result.retryCount);
 
       // Server already says we're done — refresh and let the gate route us out.
       if (result.status === 'already_verified') {
-        console.log('[IDENTITY_VERIFICATION] status already_verified → refresh()');
         await refresh();
         return;
       }
@@ -128,38 +113,27 @@ export default function IdentityVerificationScreen() {
         // The Edge Function accepted the request but didn't hand us an
         // inquiry_id. Without it, the SDK has nothing to resume into —
         // surface a server error rather than blindly invoking the SDK.
-        console.log('[IDENTITY_VERIFICATION] missing inquiry_id in successful response — bailing');
+        console.error('[IDENTITY_VERIFICATION] start inquiry succeeded but returned no inquiry_id');
         setPhase('error');
         mapError('verification.errors.server');
         return;
       }
 
-      // session_token is optional for `Inquiry.fromInquiry(id)` — Persona
-      // accepts the inquiry-id-only path. We just log so an unexpected
-      // missing token is visible during diagnostics.
-      if (!result.sessionToken) {
-        console.log('[IDENTITY_VERIFICATION] session_token is null — launching SDK with inquiry_id only (supported by Inquiry.fromInquiry)');
-      }
-
+      // session_token is optional — Persona accepts the `Inquiry.fromInquiry(id)`
+      // (inquiry-id-only) path.
       setPhase('in_sdk');
-      console.log('[IDENTITY_VERIFICATION] calling launchPersonaInquiry() with', {
-        inquiryId: result.inquiryId,
-        hasSessionToken: !!result.sessionToken,
-      });
       const sdkResult = await launchPersonaInquiry({
         inquiryId: result.inquiryId,
         sessionToken: result.sessionToken,
       });
-      console.log('[IDENTITY_VERIFICATION] launchPersonaInquiry result:', JSON.stringify(sdkResult, null, 2));
 
       if (sdkResult.outcome === 'canceled') {
-        console.log('[IDENTITY_VERIFICATION] SDK canceled → returning to idle');
         setPhase('idle');
         return;
       }
       if (sdkResult.outcome === 'error' || sdkResult.outcome === 'sdk_unavailable') {
-        console.log('[IDENTITY_VERIFICATION] SDK outcome =', sdkResult.outcome,
-          'message =', 'message' in sdkResult ? sdkResult.message : '(none)');
+        console.error('[IDENTITY_VERIFICATION] Persona SDK ended with',
+          sdkResult.outcome, '-', 'message' in sdkResult ? sdkResult.message : '');
         setPhase('error');
         mapError(
           sdkResult.outcome === 'sdk_unavailable'
@@ -172,23 +146,18 @@ export default function IdentityVerificationScreen() {
       // SDK completed — Persona accepted the submission, but the *decision*
       // comes via the webhook. Poll get_my_verification_status until it
       // settles (approved / rejected / manual_review / expired).
-      console.log('[IDENTITY_VERIFICATION] SDK completed → entering polling phase');
       setPhase('polling');
       pollAbortRef.current = { aborted: false };
       const settled = await pollVerificationStatus({ signal: pollAbortRef.current });
-      console.log('[IDENTITY_VERIFICATION] poll settled with:', JSON.stringify(settled, null, 2));
       setState(settled);
       if (settled?.verificationStatus === 'approved' && settled.identityVerifiedAt) {
-        console.log('[IDENTITY_VERIFICATION] approved → router.replace(/(tabs))');
         router.replace('/(tabs)');
         return;
       }
       setPhase('idle');
     } catch (e) {
-      console.log('[IDENTITY_VERIFICATION] caught exception in onStart');
-      console.log('[IDENTITY_VERIFICATION] exception name:', e instanceof Error ? e.name : typeof e);
-      console.log('[IDENTITY_VERIFICATION] exception message:', e instanceof Error ? e.message : String(e));
-      console.log('[IDENTITY_VERIFICATION] exception stack:', e instanceof Error ? e.stack : '(no stack)');
+      console.error('[IDENTITY_VERIFICATION] onStart failed:',
+        e instanceof Error ? e.message : String(e));
       setPhase('error');
       mapError('verification.errors.server');
     }
@@ -200,6 +169,15 @@ export default function IdentityVerificationScreen() {
         <Text style={styles.eyebrow}>{i18n.t('verification.eyebrow')}</Text>
         <Text style={styles.headline}>{i18n.t('verification.headline')}</Text>
         <Text style={styles.subline}>{i18n.t('verification.subline')}</Text>
+
+        <View style={styles.benefits}>
+          {BENEFIT_KEYS.map((key) => (
+            <View key={key} style={styles.benefitRow}>
+              <View style={styles.benefitDot} />
+              <Text style={styles.benefitText}>{i18n.t(`verification.benefits.${key}`)}</Text>
+            </View>
+          ))}
+        </View>
 
         <View style={styles.statusBlock}>
           <StatusBadge status={state?.verificationStatus ?? 'not_started'} />
@@ -283,7 +261,10 @@ function renderPrimaryAction(args: {
     );
   }
 
-  if (status === 'pending' || status === 'manual_review') {
+  // manual_review is the only refresh-only state: Persona already has a
+  // submission and a human is deciding — relaunching would be pointless and
+  // could create a duplicate inquiry.
+  if (status === 'manual_review') {
     return (
       <Pressable
         style={({ pressed }) => [styles.cta, styles.ctaSecondary, pressed && styles.ctaPressed]}
@@ -294,8 +275,13 @@ function renderPrimaryAction(args: {
     );
   }
 
-  const labelKey = status === 'rejected' || status === 'expired'
-    ? 'verification.cta.retry'
+  // Every remaining state launches/resumes Persona via onStart. For `pending`
+  // startVerificationInquiry() resumes the existing inquiry (reused === true),
+  // so no duplicate inquiry is created.
+  const labelKey =
+    status === 'pending'  ? 'verification.cta.resume'
+    : status === 'rejected' ? 'verification.cta.retry'
+    : status === 'expired'  ? 'verification.cta.restart'
     : 'verification.cta.start';
 
   return (
@@ -309,6 +295,8 @@ function renderPrimaryAction(args: {
 }
 
 // ── Pure helpers ─────────────────────────────────────────────────────────────
+
+const BENEFIT_KEYS = ['real_people', 'nearby_safety', 'protection', 'required'] as const;
 
 const statusBodyKey = (status: VerificationStatus): string =>
   `verification.body.${status}`;
@@ -357,7 +345,29 @@ const styles = StyleSheet.create({
     fontSize: 16,
     lineHeight: 24,
     color: colors.textSecondary,
+    marginBottom: spacing.lg,
+  },
+  benefits: {
+    gap: spacing.sm,
     marginBottom: spacing.xl,
+  },
+  benefitRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  benefitDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: colors.primary,
+    marginTop: 8,
+  },
+  benefitText: {
+    flex: 1,
+    fontSize: 15,
+    lineHeight: 22,
+    color: colors.textPrimary,
   },
   statusBlock: {
     backgroundColor: colors.card,
