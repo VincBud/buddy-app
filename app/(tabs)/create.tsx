@@ -24,6 +24,7 @@ import { useCurrentUser } from '../../lib/current-user';
 import { CATEGORY_META, computeExpiresAt, Job, JOB_CATEGORIES, JobCategory, JobRebooking, TimeMode } from '../../lib/jobs';
 import { upsertJob } from '../../services/jobs.service';
 import { setJobLocation } from '../../services/geo.service';
+import { getCurrentLocationFix } from '../../lib/geo-location';
 import { uploadMedia } from '../../services/media.service';
 import { addNotification } from '../../services/notifications.service';
 import { createInitialPaymentState } from '../../lib/payments';
@@ -396,20 +397,30 @@ export default function CreateScreen() {
       debugLog(`[create] handleSubmit: upsertJob done id=${jobId} (${Date.now() - tUpsert}ms)`);
 
       // Record the job's location via the secure RPC (writes exact coordinates
-      // to the private job_locations table; the world-readable payload only gets
-      // a coarse summary). We block success navigation on this: a job without a
-      // location row will not surface in the upcoming nearby feed (Geo Phase 3).
-      // Skipped for local-only/offline jobs whose id was never promoted to a UUID.
-      // TODO(geo-2c): replace these hardcoded Rosenheim test coordinates with a
-      // real device GPS fix (expo-location) or manual map/postal-code selection.
+      // to the private job_locations table; the world-readable payload only ever
+      // gets a coarse, server-owned summary — never lat/lng). We block success
+      // navigation on this: a job without a location row will not surface in the
+      // nearby feed. Skipped for local-only/offline jobs whose id was never
+      // promoted to a Supabase UUID.
       if (UUID_REGEX.test(jobId)) {
+        // Capture the real device (or cached) location. No hardcoded fallback.
+        const fixOutcome = await getCurrentLocationFix();
+        if (!fixOutcome.ok) {
+          // TODO(geo-manual-fallback): offer a manual city/postal/map-pin entry
+          // here instead of blocking, for users who deny location or have no fix.
+          console.warn(`[create] getCurrentLocationFix failed: code=${fixOutcome.code} job=${jobId}`);
+          setErrorToast(i18n.t('create.location_unavailable'));
+          return; // keep the form; do not place a job without a real location
+        }
+
+        const { fix } = fixOutcome;
         const geoOutcome = await setJobLocation({
           jobId,
-          lat: 47.8560,
-          lng: 12.1280,
-          geoPrecision: 'exact',
-          city: 'Rosenheim',
-          postalCode: '83022',
+          lat: fix.lat,
+          lng: fix.lng,
+          geoPrecision: fix.source === 'device' ? 'exact' : 'approx',
+          city: fix.city ?? null,
+          postalCode: fix.postalCode ?? null,
         });
         if (!geoOutcome.ok) {
           console.warn(`[create] set_job_location failed: code=${geoOutcome.code} job=${jobId}`);
