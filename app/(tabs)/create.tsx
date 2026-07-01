@@ -392,28 +392,28 @@ export default function CreateScreen() {
 
     // TODO(rate-limit): enforce per-user job creation rate limit (e.g. 5 active jobs or 10/day) before upsertJob.
     try {
+      // Capture the real device (or cached) location BEFORE creating the job, so
+      // a public.jobs row is never inserted without a usable location. No
+      // hardcoded fallback.
+      // TODO(geo-manual-fallback): offer a manual city/postal/map-pin entry here
+      // instead of blocking, for users who deny location or have no fix.
+      const fixOutcome = await getCurrentLocationFix();
+      if (!fixOutcome.ok) {
+        console.warn(`[create] getCurrentLocationFix failed (pre-create): code=${fixOutcome.code}`);
+        setErrorToast(i18n.t('create.location_unavailable'));
+        return; // keep the form; do not create a job without a real location
+      }
+      const { fix } = fixOutcome;
+
       const tUpsert = Date.now();
       const { jobId } = await upsertJob(newJob);
       debugLog(`[create] handleSubmit: upsertJob done id=${jobId} (${Date.now() - tUpsert}ms)`);
 
       // Record the job's location via the secure RPC (writes exact coordinates
       // to the private job_locations table; the world-readable payload only ever
-      // gets a coarse, server-owned summary — never lat/lng). We block success
-      // navigation on this: a job without a location row will not surface in the
-      // nearby feed. Skipped for local-only/offline jobs whose id was never
-      // promoted to a Supabase UUID.
+      // gets a coarse, server-owned summary — never lat/lng). Skipped for
+      // local-only/offline jobs whose id was never promoted to a Supabase UUID.
       if (UUID_REGEX.test(jobId)) {
-        // Capture the real device (or cached) location. No hardcoded fallback.
-        const fixOutcome = await getCurrentLocationFix();
-        if (!fixOutcome.ok) {
-          // TODO(geo-manual-fallback): offer a manual city/postal/map-pin entry
-          // here instead of blocking, for users who deny location or have no fix.
-          console.warn(`[create] getCurrentLocationFix failed: code=${fixOutcome.code} job=${jobId}`);
-          setErrorToast(i18n.t('create.location_unavailable'));
-          return; // keep the form; do not place a job without a real location
-        }
-
-        const { fix } = fixOutcome;
         const geoOutcome = await setJobLocation({
           jobId,
           lat: fix.lat,
@@ -423,6 +423,9 @@ export default function CreateScreen() {
           postalCode: fix.postalCode ?? null,
         });
         if (!geoOutcome.ok) {
+          // TODO(geo-cleanup): the jobs row now exists without a job_locations
+          // row, so it won't appear in the nearby feed. A future phase should
+          // handle this (retry, soft-draft, or delete the orphaned job).
           console.warn(`[create] set_job_location failed: code=${geoOutcome.code} job=${jobId}`);
           setErrorToast(i18n.t('create.location_error'));
           return; // keep the form; do not navigate without a location row
