@@ -14,6 +14,11 @@ import {
     LocationSettings,
     saveLocationSettings,
 } from '../lib/location';
+import {
+    getForegroundPermissionStatus,
+    openLocationSettings,
+    requestForegroundLocationPermission,
+} from '../lib/geo-location';
 import { goBackOrReplace } from '../lib/navigation';
 import { loadUserPreferences, saveUserPreferences } from '../lib/preferences';
 import { layout, spacing } from '../lib/spacing';
@@ -26,6 +31,7 @@ export default function LocationSettingsScreen() {
 
   const [settings, setSettings] = useState<LocationSettings>(DEFAULT_LOCATION_SETTINGS);
   const [isSaving, setIsSaving] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   useFocusEffect(
     useCallback(() => {
@@ -33,12 +39,19 @@ export default function LocationSettingsScreen() {
 
       const load = async () => {
         try {
-          const [locationSettings, userPreferences] = await Promise.all([
+          const [locationSettings, userPreferences, livePermission] = await Promise.all([
             loadLocationSettings(),
             loadUserPreferences(getActiveUserId() || undefined),
+            // Read the real OS permission (does NOT prompt) so the card always
+            // reflects the true system state, not a stale stored value.
+            getForegroundPermissionStatus(),
           ]);
           if (isActive) {
-            setSettings({ ...locationSettings, radius: userPreferences.radius });
+            setSettings({
+              ...locationSettings,
+              radius: userPreferences.radius,
+              permissionStatus: livePermission,
+            });
           }
         } catch {
           // fall back to defaults; non-fatal
@@ -56,6 +69,22 @@ export default function LocationSettingsScreen() {
 
   const setPermissionStatus = (status: LocationPermissionStatus) => {
     setSettings((prev) => ({ ...prev, permissionStatus: status }));
+  };
+
+  // Only prompts in response to this user action (never on launch/focus).
+  const handleRequestPermission = async () => {
+    setActionError(null);
+    const status = await requestForegroundLocationPermission();
+    setPermissionStatus(status);
+    if (status === 'not_determined') {
+      // The OS neither granted nor hard-denied — treat as a failed request.
+      setActionError(i18n.t('location.permission_request_failed'));
+    }
+  };
+
+  const handleOpenSettings = async () => {
+    setActionError(null);
+    await openLocationSettings();
   };
 
   const toggleDiscovery = () => {
@@ -148,7 +177,7 @@ export default function LocationSettingsScreen() {
                   styles.permissionCta,
                   pressed && styles.permissionCtaPressed,
                 ]}
-                onPress={() => setPermissionStatus('granted')}
+                onPress={handleRequestPermission}
               >
                 <Text style={styles.permissionCtaText}>
                   {i18n.t('location.permission_request_cta')}
@@ -161,12 +190,16 @@ export default function LocationSettingsScreen() {
                     styles.permissionCtaSecondary,
                     pressed && styles.permissionCtaPressed,
                   ]}
-                  onPress={() => setPermissionStatus('not_determined')}
+                  onPress={handleOpenSettings}
                 >
                   <Text style={styles.permissionCtaSecondaryText}>
                     {i18n.t('location.permission_open_cta')}
                   </Text>
                 </Pressable>
+              )}
+
+              {actionError && (
+                <Text style={styles.permissionErrorText}>{actionError}</Text>
               )}
             </View>
           )}
@@ -427,8 +460,16 @@ const styles = StyleSheet.create({
   },
   permissionActions: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: spacing.sm,
     marginTop: spacing.md,
+  },
+  permissionErrorText: {
+    width: '100%',
+    marginTop: spacing.xs,
+    color: '#991B1B',
+    fontSize: 13,
+    lineHeight: 18,
   },
   permissionCta: {
     backgroundColor: colors.secondary,
