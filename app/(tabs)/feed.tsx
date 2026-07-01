@@ -11,6 +11,7 @@ import i18n, { useLanguage } from '../../lib/i18n';
 import { completeJob as completeJobAction, isJobChatAccessible } from '../../lib/job-actions';
 import { loadJobs as loadJobsService, saveJobs as saveJobsService } from '../../services/jobs.service';
 import { fetchNearbyOpenJobs } from '../../services/geo.service';
+import { getCurrentLocationFix, loadLastKnownLocation } from '../../lib/geo-location';
 import { getBuddyScore, setBuddyScore } from '../../services/user.service';
 import { getActiveUserId } from '../../lib/auth';
 import {
@@ -136,6 +137,9 @@ export default function FeedScreen() {
   }>();
 
   const [openJobs, setOpenJobs] = useState<Job[]>([]);
+  // True when no usable origin (live fix or cached) is available, so the open
+  // feed can't run its proximity query — drives a "location needed" empty state.
+  const [locationUnavailable, setLocationUnavailable] = useState(false);
   const [acceptedJobs, setAcceptedJobs] = useState<Job[]>([]);
   const [pendingApplicationJobs, setPendingApplicationJobs] = useState<Job[]>([]);
   const [archivedJobs, setArchivedJobs] = useState<Job[]>([]);
@@ -216,27 +220,48 @@ export default function FeedScreen() {
 
       const parsedRadius = loadedUserPreferences.radius;
 
+      // Resolve the search origin from the real device location. No hardcoded
+      // fallback: prefer a live fix, else the last-known cache. getCurrentLocationFix
+      // never prompts (it only reads the already-granted permission), so this is
+      // safe to run on every feed load without triggering repeated OS dialogs.
+      // TODO(geo-manual/home): add a manual or profile home_geo origin fallback.
+      let origin: { lat: number; lng: number } | null = null;
+      const fixOutcome = await getCurrentLocationFix();
+      if (fixOutcome.ok) {
+        origin = { lat: fixOutcome.fix.lat, lng: fixOutcome.fix.lng };
+      } else {
+        const cached = await loadLastKnownLocation();
+        if (cached) {
+          origin = { lat: cached.lat, lng: cached.lng };
+        } else {
+          console.warn(`[feed] no location origin available: code=${fixOutcome.code}`);
+        }
+      }
+
       // Open feed: server-side proximity via the nearby_open_jobs RPC. The RPC
       // already filters to open jobs, excludes the caller's own + already-applied
       // jobs, and bounds the radius — so no client-side haversine/payload.location.
-      // TODO(geo-2c/4): replace this hardcoded Rosenheim origin with a real
-      // device GPS fix or the user's saved profile location.
-      const nearbyOutcome = await fetchNearbyOpenJobs({
-        lat: 47.8560,
-        lng: 12.1280,
-        radiusKm: parsedRadius,
-      });
       let nearbyOpenJobs: Job[] = [];
-      if (nearbyOutcome.ok) {
-        nearbyOpenJobs = nearbyOutcome.jobs;
+      if (!origin) {
+        setLocationUnavailable(true);
       } else {
-        console.warn(`[feed] nearby_open_jobs failed: code=${nearbyOutcome.code}`);
-        setToast({
-          message: isEnglish
-            ? 'Could not load nearby jobs. Pull to refresh.'
-            : 'Jobs in der Nähe konnten nicht geladen werden. Zum Aktualisieren ziehen.',
-          variant: 'error',
+        setLocationUnavailable(false);
+        const nearbyOutcome = await fetchNearbyOpenJobs({
+          lat: origin.lat,
+          lng: origin.lng,
+          radiusKm: parsedRadius,
         });
+        if (nearbyOutcome.ok) {
+          nearbyOpenJobs = nearbyOutcome.jobs;
+        } else {
+          console.warn(`[feed] nearby_open_jobs failed: code=${nearbyOutcome.code}`);
+          setToast({
+            message: isEnglish
+              ? 'Could not load nearby jobs. Pull to refresh.'
+              : 'Jobs in der Nähe konnten nicht geladen werden. Zum Aktualisieren ziehen.',
+            variant: 'error',
+          });
+        }
       }
 
       // Keep the existing relevance ordering (category match → price → distance)
@@ -405,6 +430,16 @@ export default function FeedScreen() {
 
   const getEmptyStateConfig = (): EmptyStateConfig => {
     if (activeTab === 'offen') {
+      if (locationUnavailable) {
+        return {
+          iconName: 'location-outline',
+          title: i18n.t('job.location_needed_title'),
+          hint: i18n.t('job.location_needed_hint'),
+          actionLabel: i18n.t('location.permission_request_cta'),
+          onAction: () => router.push('/location-settings'),
+        };
+      }
+
       if (hasOpenJobsOutsideRadius) {
         return {
           iconName: 'location-outline',
