@@ -1,12 +1,44 @@
 import { router } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Platform, Pressable, StyleSheet, Text, View } from 'react-native';
+import * as AppleAuthentication from 'expo-apple-authentication';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../lib/colors';
+import i18n from '../lib/i18n';
+import { signInWithApple } from '../services/auth.service';
 import { layout, spacing } from '../lib/spacing';
 import { typography } from '../lib/typography';
 
 export default function AuthChoiceScreen() {
   const insets = useSafeAreaInsets();
+  const [appleAvailable, setAppleAvailable] = useState(false);
+  const [appleLoading, setAppleLoading] = useState(false);
+  const [appleError, setAppleError] = useState<string | null>(null);
+
+  // Apple sign-in is iOS-only and only on devices/OS versions that support it.
+  useEffect(() => {
+    let active = true;
+    if (Platform.OS === 'ios') {
+      AppleAuthentication.isAvailableAsync()
+        .then((available) => { if (active) setAppleAvailable(available); })
+        .catch(() => { if (active) setAppleAvailable(false); });
+    }
+    return () => { active = false; };
+  }, []);
+
+  const handleApple = async () => {
+    if (appleLoading) return;
+    setAppleError(null);
+    setAppleLoading(true);
+    try {
+      const res = await signInWithApple();
+      // Success → the onAuthStateChange listener in _layout drives routing
+      // (verification + onboarding gates). Cancel → silently do nothing.
+      if (res.error) setAppleError(i18n.t('common.apple_signin_error'));
+    } finally {
+      setAppleLoading(false);
+    }
+  };
 
   return (
     <View style={[styles.root, { paddingTop: insets.top, paddingBottom: Math.max(insets.bottom, 28) }]}>
@@ -26,6 +58,22 @@ export default function AuthChoiceScreen() {
         </View>
 
         <View style={styles.actions}>
+          {Platform.OS === 'ios' && appleAvailable && (
+            <>
+              <AppleAuthentication.AppleAuthenticationButton
+                buttonType={AppleAuthentication.AppleAuthenticationButtonType.SIGN_IN}
+                buttonStyle={AppleAuthentication.AppleAuthenticationButtonStyle.BLACK}
+                cornerRadius={layout.borderRadiusMedium}
+                style={styles.appleBtn}
+                onPress={handleApple}
+              />
+              {appleLoading && (
+                <ActivityIndicator color={colors.textPrimary} style={styles.appleLoading} />
+              )}
+              {appleError && <Text style={styles.appleError}>{appleError}</Text>}
+            </>
+          )}
+
           <Pressable
             style={({ pressed }) => [styles.primaryBtn, pressed && { opacity: 0.85 }]}
             onPress={() => router.replace({ pathname: '/auth', params: { mode: 'register' } })}
@@ -103,6 +151,20 @@ const styles = StyleSheet.create({
   },
   actions: {
     gap: spacing.md,
+  },
+  appleBtn: {
+    height: layout.buttonHeight + 4,
+    width: '100%',
+  },
+  appleLoading: {
+    marginTop: -spacing.xs,
+  },
+  appleError: {
+    fontSize: 13,
+    color: '#991B1B',
+    textAlign: 'center',
+    lineHeight: 18,
+    marginTop: -spacing.xs,
   },
   primaryBtn: {
     backgroundColor: colors.primary,

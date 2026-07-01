@@ -8,6 +8,7 @@ import {
   getActiveUserEmail,
   sendOtp,
   verifyOtp,
+  signInWithApple,
   signOut as authSignOut,
   onAuthStateChange as authOnAuthStateChange,
 } from '../lib/auth';
@@ -27,7 +28,7 @@ export const getAuthUser = async (): Promise<AuthUser | null> => {
   return id ? { id, email: getActiveUserEmail() } : null;
 };
 
-export { sendOtp, verifyOtp };
+export { sendOtp, verifyOtp, signInWithApple };
 
 export const signOut = authSignOut;
 

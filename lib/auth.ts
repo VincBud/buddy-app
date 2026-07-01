@@ -5,9 +5,20 @@
  * at startup, so screens can read the current user ID without await.
  */
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants from 'expo-constants';
+import * as AppleAuthentication from 'expo-apple-authentication';
+import * as Crypto from 'expo-crypto';
 import * as Linking from 'expo-linking';
 import { supabase } from './supabase/client';
+
+/**
+ * Apple returns the user's full name ONLY on the very first authorization.
+ * We stash it here (best-effort) so a later onboarding/profile step can seed a
+ * display name. Reading/clearing it is the consumer's job; it never blocks
+ * sign-in or ensureProfile.
+ */
+export const APPLE_PENDING_NAME_KEY = 'buddy_apple_pending_name';
 
 // Builds the redirect URL that Supabase puts in the Magic Link email.
 //
@@ -120,6 +131,72 @@ export const verifyOtp = async (
     _userEmail = data.session.user.email ?? undefined;
   }
   return {};
+};
+
+/**
+ * Native Sign in with Apple (iOS only). Mirrors the OTP helpers: never throws,
+ * returns a typed outcome, and updates the module session cache on success.
+ * Routing (verification/onboarding gates) is handled by the existing
+ * onAuthStateChange listener — this function does not navigate.
+ *
+ * Nonce flow: a random rawNonce is generated; its SHA-256 hash is sent to Apple
+ * (embedded in the returned identity token), and the rawNonce is handed to
+ * Supabase so it can verify the token was minted for this request.
+ */
+export const signInWithApple = async (): Promise<{ error?: string; canceled?: boolean }> => {
+  try {
+    const rawNonce = Crypto.randomUUID();
+    const hashedNonce = await Crypto.digestStringAsync(
+      Crypto.CryptoDigestAlgorithm.SHA256,
+      rawNonce,
+    );
+
+    const credential = await AppleAuthentication.signInAsync({
+      requestedScopes: [
+        AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+        AppleAuthentication.AppleAuthenticationScope.EMAIL,
+      ],
+      nonce: hashedNonce,
+    });
+
+    if (!credential.identityToken) {
+      console.warn('[Auth] signInWithApple: missing identityToken');
+      return { error: 'apple_signin_failed' };
+    }
+
+    const { data, error } = await supabase.auth.signInWithIdToken({
+      provider: 'apple',
+      token: credential.identityToken,
+      nonce: rawNonce,
+    });
+    if (error) {
+      console.warn('[Auth] signInWithApple: signInWithIdToken failed | message:', error.message);
+      return { error: 'apple_signin_failed' };
+    }
+
+    if (data.session?.user) {
+      _userId = data.session.user.id;
+      _userEmail = data.session.user.email ?? undefined;
+    }
+
+    // Apple only sends the name on first authorization — persist it best-effort
+    // for later profile seeding. Non-fatal; never touches ensureProfile here.
+    const displayName = [credential.fullName?.givenName, credential.fullName?.familyName]
+      .filter(Boolean)
+      .join(' ')
+      .trim();
+    if (displayName) {
+      try { await AsyncStorage.setItem(APPLE_PENDING_NAME_KEY, displayName); } catch { /* non-fatal */ }
+    }
+
+    return {};
+  } catch (e) {
+    if ((e as { code?: string }).code === 'ERR_REQUEST_CANCELED') {
+      return { canceled: true };
+    }
+    console.warn('[Auth] signInWithApple failed:', e instanceof Error ? e.message : String(e));
+    return { error: 'apple_signin_failed' };
+  }
 };
 
 /** Signs the user out and clears the local cache. */
