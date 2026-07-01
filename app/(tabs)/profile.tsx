@@ -888,6 +888,15 @@ export default function ProfileScreen() {
 
       </View>
 
+      <Pressable
+        style={({ pressed }) => [styles.deleteAccountRow, pressed && { opacity: 0.7 }]}
+        // Cast: expo-router regenerates the '/delete-account' typed route on the
+        // next dev-server run; the route exists at app/delete-account.tsx.
+        onPress={() => router.push('/delete-account' as unknown as Href)}
+      >
+        <Text style={styles.deleteAccountText}>{i18n.t('profile.delete_account')}</Text>
+      </Pressable>
+
       </>)}
 
     </ScrollView>
@@ -1466,6 +1475,15 @@ const styles = StyleSheet.create({
   settingText: {
     ...typography.bodyStrong,
     color: colors.textPrimary,
+  },
+  deleteAccountRow: {
+    alignItems: 'center',
+    paddingVertical: spacing.lg,
+    marginTop: spacing.md,
+  },
+  deleteAccountText: {
+    ...typography.bodyStrong,
+    color: '#991B1B',
   },
   settingChevron: {
     ...typography.cardTitle,
