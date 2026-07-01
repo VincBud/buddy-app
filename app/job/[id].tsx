@@ -54,11 +54,6 @@ import { addNotification } from '../../services/notifications.service';
 import { loadJobs, saveJobs } from '../../services/jobs.service';
 import { typography } from '../../lib/typography';
 
-const USER_LOCATION = {
-  lat: 47.856,
-  lng: 12.128,
-};
-
 const EXTEND_OPTIONS: { label: string; ms: number }[] = [
   { label: '1h',  ms: 1  * 3600 * 1000 },
   { label: '3h',  ms: 3  * 3600 * 1000 },
@@ -66,27 +61,6 @@ const EXTEND_OPTIONS: { label: string; ms: number }[] = [
   { label: '12h', ms: 12 * 3600 * 1000 },
   { label: '24h', ms: 24 * 3600 * 1000 },
 ];
-
-const getDistance = (
-  lat1: number,
-  lon1: number,
-  lat2: number,
-  lon2: number
-) => {
-  const R = 6371;
-  const dLat = ((lat2 - lat1) * Math.PI) / 180;
-  const dLon = ((lon2 - lon1) * Math.PI) / 180;
-
-  const a =
-    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLon / 2) *
-      Math.sin(dLon / 2);
-
-  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-  return R * c;
-};
 
 export default function JobDetailScreen() {
   useLanguage();
@@ -251,14 +225,12 @@ export default function JobDetailScreen() {
     return i18n.t('common.files_count_plural');
   };
 
+  // Distance comes from the nearby_open_jobs RPC (job.distanceKm). It is only
+  // present when the job was loaded via the nearby feed; otherwise show a
+  // generic label. No raw coordinates are used or displayed here.
   const getDistanceLabel = (currentJob: Job): string => {
-    if (!currentJob.location) return i18n.t('common.nearby');
-    const km = getDistance(
-      USER_LOCATION.lat,
-      USER_LOCATION.lng,
-      currentJob.location.lat,
-      currentJob.location.lng
-    );
+    if (currentJob.distanceKm == null) return i18n.t('common.nearby');
+    const km = currentJob.distanceKm;
     if (!Number.isFinite(km) || km < 1) return '<1 km';
     const travelTimeMin = estimateTravelTime(km);
     return `${travelTimeMin} min · ${km.toFixed(1)} km`;
