@@ -10,7 +10,8 @@
     "newArchEnabled": true,
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "com.getbuddy.app"
+      "bundleIdentifier": "com.getbuddy.app",
+      "usesAppleSignIn": true
     },
     "android": {
       "adaptiveIcon": {
@@ -59,7 +60,8 @@
           "cameraPermission": false,
           "microphonePermission": false
         }
-      ]
+      ],
+      "expo-apple-authentication"
     ],
     "experiments": {
       "typedRoutes": true,
