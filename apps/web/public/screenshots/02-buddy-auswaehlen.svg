@@ -40,7 +40,7 @@
       <text x="124" y="14" class="t muted" font-size="13">·</text>
       <text x="134" y="14" class="t" font-size="13" font-weight="600">98 % Quote</text>
     </g>
-    <text x="20" y="138" class="t" font-size="22" font-weight="800">20 €</text>
+    <text x="20" y="138" class="t" font-size="22" font-weight="800">25 €</text>
     <rect x="200" y="118" width="124" height="36" rx="18" fill="#6761A8"/>
     <text x="262" y="141" text-anchor="middle" font-size="13" font-weight="700" fill="#FEFCFD" font-family="system-ui,-apple-system,'Segoe UI',Roboto,sans-serif">Ausgewählt ✓</text>
   </g>
@@ -57,7 +57,7 @@
       <text x="48" y="14" class="t muted" font-size="13">·</text>
       <text x="58" y="14" class="t" font-size="13" font-weight="600">5 Jobs</text>
     </g>
-    <text x="20" y="124" class="t" font-size="22" font-weight="800">22 €</text>
+    <text x="20" y="124" class="t" font-size="22" font-weight="800">25 €</text>
     <rect x="200" y="104" width="124" height="36" rx="18" fill="#fff" stroke="#6761A8"/>
     <text x="262" y="127" text-anchor="middle" font-size="13" font-weight="700" fill="#6761A8" font-family="system-ui,-apple-system,'Segoe UI',Roboto,sans-serif">Auswählen</text>
   </g>
@@ -74,7 +74,7 @@
       <text x="48" y="14" class="t muted" font-size="13">·</text>
       <text x="58" y="14" class="t" font-size="13" font-weight="600">8 Jobs</text>
     </g>
-    <text x="20" y="124" class="t" font-size="22" font-weight="800">18 €</text>
+    <text x="20" y="124" class="t" font-size="22" font-weight="800">25 €</text>
     <rect x="200" y="104" width="124" height="36" rx="18" fill="#fff" stroke="#6761A8"/>
     <text x="262" y="127" text-anchor="middle" font-size="13" font-weight="700" fill="#6761A8" font-family="system-ui,-apple-system,'Segoe UI',Roboto,sans-serif">Auswählen</text>
   </g>
