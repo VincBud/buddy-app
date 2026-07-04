@@ -13,8 +13,10 @@
       "bundleIdentifier": "com.vincentfitsch.buddy",
       "usesAppleSignIn": true,
       "infoPlist": {
-        "ITSAppUsesNonExemptEncryption": false
-      }
+        "ITSAppUsesNonExemptEncryption": false,
+        "NSCameraUsageDescription": "Buddy benötigt Zugriff auf deine Kamera, falls du ein Foto zu einem Auftrag, Chat oder Profil hinzufügen möchtest."
+      },
+      "buildNumber": "2"
     },
     "android": {
       "adaptiveIcon": {
