@@ -20,6 +20,7 @@ import { getActiveUserId } from '../lib/auth';
 import i18n, { useLanguage } from '../lib/i18n';
 import { activateMatchedJob, confirmJobCompletion, confirmJobCancellation, declineJobCancellation, isJobChatAccessible, isJobChatWritable, openJobDispute, requestJobCancellation } from '../lib/job-actions';
 import { getBuddyPointsForJob, Job } from '../lib/jobs';
+import { chooseImageSource, takePhotoWithCamera } from '../lib/media-picker';
 import { goBackOrReplace } from '../lib/navigation';
 import { addNotification } from '../services/notifications.service';
 import { uploadChatImage } from '../services/media.service';
@@ -617,9 +618,19 @@ export default function ChatScreen() {
     await saveStoredMessages(jobId, nextMessages);
   };
 
-  // Gallery picker — sets a pending attachment shown above the composer.
-  // Upload happens on send, not on selection (matches WhatsApp/iMessage behaviour).
+  // Attachment picker — camera or gallery; sets a pending attachment shown
+  // above the composer. Upload happens on send, not on selection (matches
+  // WhatsApp/iMessage behaviour).
   const pickAttachment = async () => {
+    const source = await chooseImageSource();
+    if (!source) return;
+
+    if (source === 'camera') {
+      const shot = await takePhotoWithCamera();
+      if (shot.status === 'ok') setPendingAttachment({ uri: shot.uri });
+      return; // canceled/denied handled inside the helper
+    }
+
     try {
       const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permissionResult.granted) {

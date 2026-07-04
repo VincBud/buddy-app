@@ -25,6 +25,7 @@ import { CATEGORY_META, computeExpiresAt, Job, JOB_CATEGORIES, JobCategory, JobR
 import { upsertJob } from '../../services/jobs.service';
 import { setJobLocation } from '../../services/geo.service';
 import { getCurrentLocationFix } from '../../lib/geo-location';
+import { chooseImageSource, takePhotoWithCamera } from '../../lib/media-picker';
 import { uploadMedia } from '../../services/media.service';
 import { addNotification } from '../../services/notifications.service';
 import { createInitialPaymentState } from '../../lib/payments';
@@ -254,6 +255,17 @@ export default function CreateScreen() {
     if (media.length >= 3) {
       setErrorToast(i18n.t('create.max_3_media'));
       return;
+    }
+
+    const source = await chooseImageSource();
+    if (!source) return;
+
+    if (source === 'camera') {
+      const shot = await takePhotoWithCamera();
+      if (shot.status === 'ok') {
+        setMedia([...media, shot.uri].slice(0, 3));
+      }
+      return; // canceled/denied handled inside the helper
     }
 
     const permissionResult =

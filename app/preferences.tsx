@@ -6,6 +6,7 @@ import { Image, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../lib/colors';
 import i18n, { useLanguage } from '../lib/i18n';
+import { chooseImageSource, takePhotoWithCamera } from '../lib/media-picker';
 import { goBackOrReplace } from '../lib/navigation';
 import {
     AVAILABILITY_SLOTS,
@@ -103,6 +104,15 @@ export default function PreferencesScreen() {
   };
 
   const pickProfileImage = async () => {
+    const source = await chooseImageSource();
+    if (!source) return;
+
+    if (source === 'camera') {
+      const shot = await takePhotoWithCamera({ allowsEditing: true, aspect: [1, 1] });
+      if (shot.status === 'ok') setProfileImageUri(shot.uri);
+      return; // canceled/denied handled inside the helper
+    }
+
     const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (!permission.granted) return;
     const result = await ImagePicker.launchImageLibraryAsync({

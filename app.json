@@ -14,9 +14,8 @@
       "usesAppleSignIn": true,
       "infoPlist": {
         "ITSAppUsesNonExemptEncryption": false,
-        "NSCameraUsageDescription": "Buddy benötigt Zugriff auf deine Kamera, falls du ein Foto zu einem Auftrag, Chat oder Profil hinzufügen möchtest."
-      },
-      "buildNumber": "2"
+        "NSCameraUsageDescription": "Buddy benötigt Zugriff auf deine Kamera, damit du Fotos zu Aufträgen, Chats oder deinem Profil aufnehmen und hinzufügen kannst."
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -66,7 +65,7 @@
         "expo-image-picker",
         {
           "photosPermission": "Buddy benötigt Zugriff auf deine Fotos, damit du Bilder zu Aufträgen, Chats oder deinem Profil hinzufügen kannst.",
-          "cameraPermission": false,
+          "cameraPermission": "Buddy benötigt Zugriff auf deine Kamera, damit du Fotos zu Aufträgen, Chats oder deinem Profil aufnehmen und hinzufügen kannst.",
           "microphonePermission": false
         }
       ],

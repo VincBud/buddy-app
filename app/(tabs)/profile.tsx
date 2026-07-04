@@ -16,6 +16,7 @@ import { getActiveUserId } from '../../lib/auth';
 import i18n, { getLanguage, setLanguage, useLanguage } from '../../lib/i18n';
 import { getActiveOwnJobs, getMatchedBuddyId, getMatchedBuddyName, isActiveJobStatus, isEligibleForRebooking, Job } from '../../lib/jobs';
 import { getLevelInfo } from '../../lib/levels';
+import { chooseImageSource, takePhotoWithCamera } from '../../lib/media-picker';
 import {
   loadUserPreferences,
   UserPreferences,
@@ -148,8 +149,22 @@ export default function ProfileScreen() {
     router.replace('/(tabs)/profile');
   };
 
+  const applyProfileImage = async (uri: string) => {
+    setProfileImageUri(uri);
+    await updateUserProfile({ profileImageUri: uri });
+  };
+
   const pickProfileImage = async () => {
     try {
+      const source = await chooseImageSource();
+      if (!source) return;
+
+      if (source === 'camera') {
+        const shot = await takePhotoWithCamera({ allowsEditing: true, aspect: [1, 1] });
+        if (shot.status === 'ok') await applyProfileImage(shot.uri);
+        return; // canceled/denied handled inside the helper
+      }
+
       const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permission.granted) {
         alert(i18n.t('profile.avatar_permission_denied'));
@@ -165,9 +180,7 @@ export default function ProfileScreen() {
 
       if (result.canceled || !result.assets?.[0]?.uri) return;
 
-      const uri = result.assets[0].uri;
-      setProfileImageUri(uri);
-      await updateUserProfile({ profileImageUri: uri });
+      await applyProfileImage(result.assets[0].uri);
     } catch (error) {
       console.error('Error picking profile image:', error);
       alert(i18n.t('profile.avatar_update_error'));

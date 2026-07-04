@@ -732,6 +732,14 @@ const translations = {
         sdk_unavailable: 'Persona SDK ist in diesem Build nicht verfügbar. Bitte Development Build neu erstellen oder nicht Expo Go verwenden.',
       },
     },
+    media_picker: {
+      title: 'Foto hinzufügen',
+      take_photo: 'Foto aufnehmen',
+      from_library: 'Aus Galerie wählen',
+      cancel: 'Abbrechen',
+      camera_denied_title: 'Kamerazugriff benötigt',
+      camera_denied_body: 'Bitte erlaube Buddy den Zugriff in den iOS-Einstellungen, um Fotos direkt aufzunehmen.',
+    },
     deleteAccount: {
       back: 'Zurück',
       title: 'Konto löschen',
@@ -1538,6 +1546,14 @@ const translations = {
         sdk: 'The verification ended unexpectedly. Please try again.',
         sdk_unavailable: 'Persona SDK is not available in this build. Please rebuild the development build or stop using Expo Go.',
       },
+    },
+    media_picker: {
+      title: 'Add photo',
+      take_photo: 'Take photo',
+      from_library: 'Choose from gallery',
+      cancel: 'Cancel',
+      camera_denied_title: 'Camera access needed',
+      camera_denied_body: 'Please allow Buddy access in your device settings to take photos directly.',
     },
     deleteAccount: {
       back: 'Back',
