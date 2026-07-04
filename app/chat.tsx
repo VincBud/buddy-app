@@ -236,7 +236,7 @@ const normalizeStoredMessages = (value: unknown): ChatMessage[] => {
 // every chat re-open. The set is purely a log/UI guard; it is never persisted.
 const brokenImageUrls = new Set<string>();
 
-const ChatMessageImage = memo(({ uri }: { uri: string }) => {
+const ChatMessageImage = memo(function ChatMessageImage({ uri }: { uri: string }) {
   const [failed, setFailed] = useState(brokenImageUrls.has(uri));
   const [bustedUri, setBustedUri] = useState<string | null>(null);
   const triedRetryRef = useRef(false);

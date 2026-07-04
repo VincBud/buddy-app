@@ -39,7 +39,7 @@ export default function IntroScreen() {
         showsVerticalScrollIndicator={false}
         bounces={false}
       >
-        <Text style={styles.heading}>So funktioniert's</Text>
+        <Text style={styles.heading}>So funktioniert’s</Text>
         <Text style={styles.subheading}>In drei Schritten zur Lösung.</Text>
 
         <View style={styles.cards}>

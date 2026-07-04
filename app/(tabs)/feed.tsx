@@ -67,7 +67,7 @@ type EmptyStateConfig = {
 // URLs stay hidden across re-renders / tab switches.
 const brokenFeedImageUrls = new Set<string>();
 
-const FeedMediaImage = memo(({ uri }: { uri: string }) => {
+const FeedMediaImage = memo(function FeedMediaImage({ uri }: { uri: string }) {
   const [failed, setFailed] = useState(brokenFeedImageUrls.has(uri));
   const [bustedUri, setBustedUri] = useState<string | null>(null);
   const triedRetryRef = useRef(false);
