@@ -25,6 +25,7 @@ import {
 } from '../../lib/job-actions';
 import { addNotification } from '../../services/notifications.service';
 import { loadJobs } from '../../services/jobs.service';
+import { getActiveUserId } from '../../lib/auth';
 import { Job, JobParticipantRole, JobStatus } from '../../lib/jobs';
 import { goBackOrReplace } from '../../lib/navigation';
 import { ensureJobPaymentState, formatPriceLine } from '../../lib/payments';
@@ -177,7 +178,18 @@ export default function ChatDetailsScreen() {
   const requesterName = String(
     job?.creatorName?.trim() || i18n.t('common.default_user_name')
   );
-  const currentUserRole = normalizeRoleParam(params.currentUserRole);
+  // Role is derived from authoritative job data, NOT the (droppable) route param:
+  // the owner is creator_id === current user, the assigned buddy is
+  // assigned_buddy_id === current user. This guarantees the owner always sees the
+  // cost overview and the buddy only their payout — even when the param is missing
+  // or stale (e.g. after navigating back into the chat). The param is only a
+  // fallback for the brief window before the job has loaded.
+  const currentUserRole: JobParticipantRole = useMemo(() => {
+    const uid = getActiveUserId();
+    if (uid && job?.requesterId === uid) return 'auftraggeber';
+    if (uid && job?.assignedBuddyId === uid) return 'buddy';
+    return normalizeRoleParam(params.currentUserRole);
+  }, [job?.requesterId, job?.assignedBuddyId, params.currentUserRole]);
   const requesterInitial = requesterName.charAt(0).toUpperCase();
 
   // Trust & Safety: report the counterparty (never the current user).
@@ -565,7 +577,7 @@ export default function ChatDetailsScreen() {
           {!isCancelled && job && params.fromChat !== 'true' && (
             <Pressable
               style={({ pressed }) => [styles.openChatButton, pressed && styles.actionButtonPressed]}
-              onPress={() => router.push({ pathname: '/chat', params: { jobId: job.id, problem: job.problem || '', price: job.price || '', creatorName: job.creatorName || '' } })}
+              onPress={() => router.push({ pathname: '/chat', params: { jobId: job.id, problem: job.problem || '', price: job.price || '', creatorName: job.creatorName || '', currentUserRole } })}
             >
               <Text style={styles.openChatButtonText}>{i18n.t('chat.open_chat', { defaultValue: isEnglish ? 'Open Chat' : 'Chat öffnen' })}</Text>
             </Pressable>
