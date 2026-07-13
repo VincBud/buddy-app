@@ -286,6 +286,42 @@ const STATUS_PRECEDENCE: Record<string, number> = {
 const advancedStatus = (a: string, b: string): string =>
   (STATUS_PRECEDENCE[b] ?? 0) > (STATUS_PRECEDENCE[a] ?? 0) ? b : a;
 
+// Cross-device self-heal: jobs.assigned_buddy_id (written server-side by the
+// review_job_application RPC) is the authoritative acceptance signal. The
+// buddy's local match.applications entry was written at apply time and stays
+// 'pending' forever on their device — the owner's accept only updates the
+// server and the owner's local state. Reconcile so every screen that reads
+// requesterDecision (job detail CTA, pending sections) agrees with the server.
+const reconcileApplicationsWithAssignment = (job: Job): Job => {
+  const assigned = job.assignedBuddyId;
+  if (!assigned || !job.match?.applications?.length) return job;
+
+  let changed = false;
+  const applications = job.match.applications.map((a) => {
+    const want: 'accepted' | 'declined' | 'pending' =
+      a.buddyId === assigned
+        ? 'accepted'
+        : a.requesterDecision === 'pending'
+          ? 'declined'
+          : a.requesterDecision;
+    if (a.requesterDecision !== want) {
+      changed = true;
+      return { ...a, requesterDecision: want };
+    }
+    return a;
+  });
+
+  if (!changed && job.match.selectedApplicationId) return job;
+  return {
+    ...job,
+    match: {
+      ...job.match,
+      applications,
+      selectedApplicationId: job.match.selectedApplicationId ?? assigned,
+    },
+  };
+};
+
 const mergeJobs = (remote: Job[], local: Job[]): Job[] => {
   const localById = new Map<string, Job>();
   for (const j of local) localById.set(j.id, j);
@@ -343,7 +379,7 @@ const mergeJobs = (remote: Job[], local: Job[]): Job[] => {
     merged.set(localJob.id, localJob);
   }
 
-  return [...merged.values()].sort((a, b) => {
+  return [...merged.values()].map(reconcileApplicationsWithAssignment).sort((a, b) => {
     const aMs = a.createdAt ? new Date(a.createdAt).getTime() : 0;
     const bMs = b.createdAt ? new Date(b.createdAt).getTime() : 0;
     return bMs - aMs;

@@ -526,12 +526,18 @@ export default function JobDetailScreen() {
     if (!job) return;
     try {
       setIsReviewingApplication(true);
-      const { updatedJob } = await updateJobRequest({
+      const { updatedJob, rpcSuccess } = await updateJobRequest({
         jobId: job.id,
         buddyId,
         decision: 'accept',
         requesterId: activeUserId,
       });
+      // Server write failed → nothing was accepted (local state untouched).
+      // Surface it instead of navigating into a chat the buddy will never see.
+      if (!rpcSuccess) {
+        Alert.alert(i18n.t('job.review_failed_title'), i18n.t('job.review_failed_body'));
+        return;
+      }
       if (updatedJob) {
         setJob(updatedJob);
         router.push({
@@ -559,12 +565,16 @@ export default function JobDetailScreen() {
     if (!job) return;
     try {
       setIsReviewingApplication(true);
-      const { updatedJob } = await updateJobRequest({
+      const { updatedJob, rpcSuccess } = await updateJobRequest({
         jobId: job.id,
         buddyId,
         decision: 'decline',
         requesterId: activeUserId,
       });
+      if (!rpcSuccess) {
+        Alert.alert(i18n.t('job.review_failed_title'), i18n.t('job.review_failed_body'));
+        return;
+      }
       if (updatedJob) setJob(updatedJob);
       // DB trigger sends jobApplicationDeclined to the buddy — no local copy needed here.
     } catch {

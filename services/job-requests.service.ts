@@ -23,6 +23,10 @@ import {
 } from '../lib/job-actions';
 import { upsertJob, getJobById } from './jobs.service';
 
+// Jobs created offline/dev start with a timestamp id; only UUID ids exist remotely.
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 // ─── Supabase row type & converters ───────────────────────────────────────────
 
 type JobApplicationRow = {
@@ -283,6 +287,24 @@ export const updateJobRequest = async (
   },
   _userId?: string
 ): Promise<{ request: JobRequest | null; updatedJob: Job | null; rpcSuccess: boolean }> => {
+  // 0. Server FIRST for real (synced) jobs. review_job_application is the
+  //    authoritative write: job_applications.status, jobs.status='matched' and
+  //    jobs.assigned_buddy_id all flip server-side. If that RPC fails we must
+  //    NOT mutate local state — otherwise the owner's device shows 'matched'
+  //    while the server (and therefore the buddy's device) stays 'open'/
+  //    'pending' forever. Callers gate navigation on rpcSuccess.
+  //    Local-only jobs (no Supabase / non-UUID id) have no remote op — treated
+  //    as success so the dev/offline flow keeps working.
+  let rpcSuccess = true;
+  const isRemoteJob = isSupabaseConfigured && UUID_REGEX.test(params.jobId);
+  if (isRemoteJob && params.decision !== 'wait') {
+    const dbDecision = params.decision === 'accept' ? 'accepted' : 'rejected';
+    rpcSuccess = await reviewApplicationRemote(params.jobId, params.buddyId, dbDecision);
+    if (!rpcSuccess) {
+      return { request: null, updatedJob: null, rpcSuccess: false };
+    }
+  }
+
   // 1. Apply decision in AsyncStorage via job-actions
   let result = await reviewJobApplication({
     jobId: params.jobId,
@@ -333,18 +355,12 @@ export const updateJobRequest = async (
     }
   }
 
-  if (!result.updatedJob) return { request: null, updatedJob: null, rpcSuccess: false };
+  if (!result.updatedJob) return { request: null, updatedJob: null, rpcSuccess };
 
-  // 2. Server first — review_job_application RPC writes job_applications.status
-  //    and (on accept) flips jobs.status='matched' + jobs.assigned_buddy_id
-  //    server-side. The new jobs_update_own RLS blocks direct client writes
-  //    to those protected columns, so the upsert below must run AFTER the RPC
-  //    so it only echoes the values the RPC just set (IS NOT DISTINCT FROM).
-  let rpcSuccess = params.decision === 'wait'; // 'wait' has no remote op — treat as ok
-  if (isSupabaseConfigured && params.decision !== 'wait') {
-    const dbDecision = params.decision === 'accept' ? 'accepted' : 'rejected';
-    rpcSuccess = await reviewApplicationRemote(params.jobId, params.buddyId, dbDecision);
-  }
+  // 2. (Server write already happened in step 0 — before any local mutation.)
+  //    The jobs_update_own RLS blocks direct client writes to the protected
+  //    columns (status, assigned_buddy_id), so the upsert below only echoes
+  //    the values the RPC just set (IS NOT DISTINCT FROM).
 
   // 3. Sync the updated job to Supabase to persist payload fields
   //    (match.applications etc). Protected columns (status, assigned_buddy_id)
