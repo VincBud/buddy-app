@@ -22,8 +22,8 @@ import i18n, { useLanguage } from '../../lib/i18n';
 import { getActiveUserId } from '../../lib/auth';
 import { useCurrentUser } from '../../lib/current-user';
 import { CATEGORY_META, computeExpiresAt, Job, JOB_CATEGORIES, JobCategory, JobRebooking, TimeMode } from '../../lib/jobs';
-import { upsertJob } from '../../services/jobs.service';
-import { setJobLocation } from '../../services/geo.service';
+import { upsertJob, deleteJob } from '../../services/jobs.service';
+import { setJobLocation, type SetJobLocationParams } from '../../services/geo.service';
 import { getCurrentLocationFix } from '../../lib/geo-location';
 import { chooseImageSource, takePhotoWithCamera } from '../../lib/media-picker';
 import { uploadMedia } from '../../services/media.service';
@@ -426,21 +426,32 @@ export default function CreateScreen() {
       // gets a coarse, server-owned summary — never lat/lng). Skipped for
       // local-only/offline jobs whose id was never promoted to a Supabase UUID.
       if (UUID_REGEX.test(jobId)) {
-        const geoOutcome = await setJobLocation({
+        const geoParams: SetJobLocationParams = {
           jobId,
           lat: fix.lat,
           lng: fix.lng,
           geoPrecision: fix.source === 'device' ? 'exact' : 'approx',
           city: fix.city ?? null,
           postalCode: fix.postalCode ?? null,
-        });
+        };
+        // One retry absorbs a transient RPC hiccup before we give up.
+        let geoOutcome = await setJobLocation(geoParams);
         if (!geoOutcome.ok) {
-          // TODO(geo-cleanup): the jobs row now exists without a job_locations
-          // row, so it won't appear in the nearby feed. A future phase should
-          // handle this (retry, soft-draft, or delete the orphaned job).
-          console.warn(`[create] set_job_location failed: code=${geoOutcome.code} job=${jobId}`);
+          geoOutcome = await setJobLocation(geoParams);
+        }
+        if (!geoOutcome.ok) {
+          // The jobs row was inserted but has no job_locations row — it would be
+          // an orphaned, locationless open job that never surfaces in the nearby
+          // feed (nearby_open_jobs INNER JOINs job_locations). Roll the job back
+          // so creation is all-or-nothing: no location ⇒ no job.
+          console.warn(`[create] set_job_location failed after retry: code=${geoOutcome.code} job=${jobId} — rolling back job`);
+          try {
+            await deleteJob(jobId);
+          } catch (delErr) {
+            console.warn('[create] rollback deleteJob failed:', delErr instanceof Error ? delErr.message : String(delErr));
+          }
           setErrorToast(i18n.t('create.location_error'));
-          return; // keep the form; do not navigate without a location row
+          return; // keep the form; nothing persisted remotely
         }
       }
 

@@ -72,7 +72,9 @@ export const setJobLocation = async (
         (KNOWN_ERROR_CODES as readonly string[]).includes(error.message)
           ? (error.message as SetJobLocationErrorCode)
           : 'unknown';
-      console.warn(`[geo.service] set_job_location failed: code=${error.code} message="${error.message}"`);
+      console.warn(
+        `[geo.service] set_job_location failed: code=${error.code} message="${error.message}" details="${error.details ?? ''}" hint="${error.hint ?? ''}"`,
+      );
       return { ok: false, code };
     }
 
@@ -145,7 +147,9 @@ export const fetchNearbyOpenJobs = async (
         (KNOWN_NEARBY_ERROR_CODES as readonly string[]).includes(error.message)
           ? (error.message as FetchNearbyErrorCode)
           : 'unknown';
-      console.warn(`[geo.service] nearby_open_jobs failed: code=${error.code} message="${error.message}"`);
+      console.warn(
+        `[geo.service] nearby_open_jobs failed: code=${error.code} message="${error.message}" details="${error.details ?? ''}" hint="${error.hint ?? ''}"`,
+      );
       return { ok: false, code };
     }
 

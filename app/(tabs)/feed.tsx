@@ -46,7 +46,7 @@ type SmartBadge = {
 };
 
 type EmptyStateConfig = {
-  iconName: 'location-outline' | 'sparkles-outline' | 'briefcase-outline' | 'archive-outline';
+  iconName: 'location-outline' | 'sparkles-outline' | 'briefcase-outline' | 'archive-outline' | 'cloud-offline-outline';
   title: string;
   hint: string;
   actionLabel?: string;
@@ -140,6 +140,9 @@ export default function FeedScreen() {
   // True when no usable origin (live fix or cached) is available, so the open
   // feed can't run its proximity query — drives a "location needed" empty state.
   const [locationUnavailable, setLocationUnavailable] = useState(false);
+  // Distinguishes a technical failure of the nearby RPC from a genuinely empty
+  // feed, so the empty state can say "couldn't load" instead of "no jobs".
+  const [feedLoadError, setFeedLoadError] = useState(false);
   const [acceptedJobs, setAcceptedJobs] = useState<Job[]>([]);
   const [pendingApplicationJobs, setPendingApplicationJobs] = useState<Job[]>([]);
   const [archivedJobs, setArchivedJobs] = useState<Job[]>([]);
@@ -244,6 +247,7 @@ export default function FeedScreen() {
       let nearbyOpenJobs: Job[] = [];
       if (!origin) {
         setLocationUnavailable(true);
+        setFeedLoadError(false);
       } else {
         setLocationUnavailable(false);
         const nearbyOutcome = await fetchNearbyOpenJobs({
@@ -253,8 +257,10 @@ export default function FeedScreen() {
         });
         if (nearbyOutcome.ok) {
           nearbyOpenJobs = nearbyOutcome.jobs;
+          setFeedLoadError(false);
         } else {
           console.warn(`[feed] nearby_open_jobs failed: code=${nearbyOutcome.code}`);
+          setFeedLoadError(true);
           setToast({
             message: isEnglish
               ? 'Could not load nearby jobs. Pull to refresh.'
@@ -437,6 +443,18 @@ export default function FeedScreen() {
           hint: i18n.t('job.location_needed_hint'),
           actionLabel: i18n.t('location.permission_request_cta'),
           onAction: () => router.push('/location-settings'),
+        };
+      }
+
+      // Technical failure of the nearby RPC — distinct from a genuinely empty
+      // feed. Offers a retry instead of implying there are simply no jobs.
+      if (feedLoadError) {
+        return {
+          iconName: 'cloud-offline-outline',
+          title: i18n.t('job.jobs_load_error_title'),
+          hint: i18n.t('job.jobs_load_error_hint'),
+          actionLabel: i18n.t('job.jobs_load_error_action'),
+          onAction: () => { loadJobs(); },
         };
       }
 
