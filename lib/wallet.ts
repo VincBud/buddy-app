@@ -78,17 +78,63 @@ const getDefaultWalletSettings = (): WalletSettings => {
   };
 };
 
-const getFallbackTimestamp = (job: Pick<Job, 'id' | 'review'>): string => {
-  if (job.review?.reviewedAt) {
-    return job.review.reviewedAt;
+// Minimum plausible transaction time. Anything before this — including the Unix
+// epoch produced by the old `Number(uuid)` → NaN → `new Date(0)` bug — is treated
+// as missing so it can never render as "1. Januar 1970".
+export const MIN_VALID_TIMESTAMP_MS = Date.UTC(2015, 0, 1);
+
+export const isValidWalletTimestamp = (value: string | null | undefined): boolean => {
+  if (!value) return false;
+  const ms = new Date(value).getTime();
+  return Number.isFinite(ms) && ms >= MIN_VALID_TIMESTAMP_MS;
+};
+
+// Fields that can carry a reliable creation time for a job's earning.
+type TimestampSource = Pick<Job, 'id'> &
+  Partial<Pick<Job, 'review' | 'completionConfirmation' | 'updatedAt' | 'createdAt'>>;
+
+// Derive a genuine historical timestamp from the job, or null if none exists.
+// Priority: review time → completion-confirmation times → job updated/created →
+// a legacy numeric (ms) job id. UUID ids are non-numeric and correctly skipped
+// (that path was the source of the 1970 bug). Never returns the current time.
+const deriveReliableTimestamp = (job: TimestampSource): string | null => {
+  const candidates = [
+    job.review?.reviewedAt,
+    job.completionConfirmation?.buddyConfirmedAt,
+    job.completionConfirmation?.ownerConfirmedAt,
+    job.updatedAt,
+    job.createdAt,
+  ];
+  for (const candidate of candidates) {
+    if (isValidWalletTimestamp(candidate)) return candidate as string;
   }
 
   const parsedId = Number(job.id);
-  if (Number.isFinite(parsedId) && parsedId > 0) {
+  if (Number.isFinite(parsedId) && parsedId >= MIN_VALID_TIMESTAMP_MS) {
     return new Date(parsedId).toISOString();
   }
 
-  return new Date(0).toISOString();
+  return null;
+};
+
+// For a NEW earning being recorded now, a reliable historical time is preferred;
+// only as a genuine last resort do we stamp the current time. We never fall back
+// to epoch 0.
+const getFallbackTimestamp = (job: TimestampSource): string => {
+  return deriveReliableTimestamp(job) ?? new Date().toISOString();
+};
+
+// The payout recipient is the job's ASSIGNED HELPER, derived from the job record:
+// assignedBuddyId is the authoritative cross-device signal (set server-side by
+// review_job_application); selectedApplicationId is the local mirror. It is never
+// the user who pressed "complete" and never the owner. Because only the assigned
+// helper's own device records the positive earning, the owner can never be
+// credited — regardless of which screen triggered completion.
+const isCurrentUserAssignedHelper = (
+  job: Partial<Pick<Job, 'assignedBuddyId' | 'match'>>,
+): boolean => {
+  const assignedHelperId = job.assignedBuddyId ?? job.match?.selectedApplicationId;
+  return !!assignedHelperId && assignedHelperId === getActiveUserId();
 };
 
 const getJobWalletEarningAmount = (job: Pick<Job, 'price'> & Partial<Pick<Job, 'payment'>>): number => {
@@ -243,9 +289,15 @@ const migrateLegacyPayouts = (
   };
 };
 
+type CompletedJobForEarning = Pick<Job, 'id' | 'problem' | 'price'> &
+  Partial<Pick<Job, 'review' | 'completionConfirmation' | 'updatedAt' | 'createdAt' | 'assignedBuddyId' | 'match' | 'payment'>>;
+
+// Backfill earnings for the current user's completed jobs. Only jobs where the
+// current user is the assigned helper are credited — the owner is never credited
+// even if their completed jobs are passed in.
 const ensureCompletedJobEarnings = (
   transactions: WalletTransaction[],
-  completedJobs: Pick<Job, 'id' | 'problem' | 'price' | 'review'>[]
+  completedJobs: CompletedJobForEarning[]
 ): { nextTransactions: WalletTransaction[]; changed: boolean } => {
   const existingEarningJobIds = new Set(
     transactions
@@ -258,6 +310,11 @@ const ensureCompletedJobEarnings = (
 
   for (const job of completedJobs) {
     if (existingEarningJobIds.has(String(job.id))) {
+      continue;
+    }
+
+    // Authoritative payout gate: only the assigned helper is ever credited.
+    if (!isCurrentUserAssignedHelper(job)) {
       continue;
     }
 
@@ -284,8 +341,36 @@ const ensureCompletedJobEarnings = (
   };
 };
 
+// Repair earnings whose stored createdAt is invalid/epoch-0 (from the old 1970
+// bug) by re-deriving a genuine historical time from the matching completed job.
+// Only upgrades when a reliable timestamp exists — it never stamps "now" and
+// never touches already-valid dates, so legitimate history is preserved.
+const repairEarningTimestamps = (
+  transactions: WalletTransaction[],
+  completedJobs: CompletedJobForEarning[]
+): { nextTransactions: WalletTransaction[]; changed: boolean } => {
+  if (transactions.length === 0) return { nextTransactions: transactions, changed: false };
+
+  const jobById = new Map(completedJobs.map((job) => [String(job.id), job]));
+  let changed = false;
+
+  const next = transactions.map((tx) => {
+    if (tx.type !== 'earning' || isValidWalletTimestamp(tx.createdAt)) return tx;
+    const job = tx.jobId ? jobById.get(String(tx.jobId)) : undefined;
+    const derived = job ? deriveReliableTimestamp(job) : null;
+    if (derived) {
+      console.warn(`[wallet] repairing invalid earning date: id=${tx.id} old="${tx.createdAt}" new="${derived}"`);
+      changed = true;
+      return { ...tx, createdAt: derived };
+    }
+    return tx;
+  });
+
+  return { nextTransactions: next, changed };
+};
+
 const loadTransactionsState = async (
-  completedJobs: Pick<Job, 'id' | 'problem' | 'price' | 'review'>[]
+  completedJobs: CompletedJobForEarning[]
 ): Promise<WalletTransaction[]> => {
   const [transactionsRaw, legacyPayoutsRaw] = await Promise.all([
     AsyncStorage.getItem(WALLET_TRANSACTIONS_KEY),
@@ -301,11 +386,13 @@ const loadTransactionsState = async (
 
   const migration = migrateLegacyPayouts(parsedTransactions, parsedLegacyPayouts);
   const withEarnings = ensureCompletedJobEarnings(migration.nextTransactions, completedJobs);
-  const normalized = normalizeTransactions(withEarnings.nextTransactions);
+  const repaired = repairEarningTimestamps(withEarnings.nextTransactions, completedJobs);
+  const normalized = normalizeTransactions(repaired.nextTransactions);
 
   const wasChanged =
     migration.changed ||
     withEarnings.changed ||
+    repaired.changed ||
     normalized.length !== parsedTransactions.length;
 
   if (wasChanged) {
@@ -443,8 +530,16 @@ export const createEmptyWalletSnapshot = (): WalletSnapshot => {
 };
 
 export const recordJobCompletionEarning = async (
-  job: Pick<Job, 'id' | 'problem' | 'price' | 'review'> & Partial<Pick<Job, 'payment'>>
+  job: CompletedJobForEarning
 ): Promise<void> => {
+  // Single authoritative payout gate: the positive earning is recorded ONLY on
+  // the assigned helper's device, with the recipient derived from the job record
+  // (never from who pressed "complete", never the owner). This is what prevents
+  // the double-credit — the owner's device records nothing here.
+  if (!isCurrentUserAssignedHelper(job)) {
+    return;
+  }
+
   const amount = getJobWalletEarningAmount(job);
   if (amount <= 0) return;
 

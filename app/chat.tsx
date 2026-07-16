@@ -398,6 +398,12 @@ export default function ChatScreen() {
       problem: jobContext.problem,
       price: jobContext.price,
       payment: job.payment,
+      // Payout gate + reliable date derive from the authoritative job record —
+      // recordJobCompletionEarning credits only the assigned helper, never the owner.
+      assignedBuddyId: job.assignedBuddyId,
+      match: job.match,
+      completionConfirmation: job.completionConfirmation,
+      updatedAt: job.updatedAt,
     });
     await incrementReliabilityStats(getActiveUserId(), 'completedJobs');
     if (job.requesterId) {

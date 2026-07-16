@@ -11,6 +11,7 @@ import { typography } from '../lib/typography';
 import {
     createEmptyWalletSnapshot,
     loadWalletSnapshotFromStorage,
+    MIN_VALID_TIMESTAMP_MS,
     requestWalletPayoutFromStorage,
     WalletEntryTone,
     WalletSnapshot,
@@ -49,7 +50,14 @@ export default function WalletScreen() {
   };
 
   const formatWalletDate = (date: string) => {
-    return new Date(date).toLocaleDateString(currentLanguage === 'en' ? 'en-US' : 'de-DE', {
+    const ms = new Date(date).getTime();
+    // Guard against missing/invalid or epoch-0 (1970) timestamps — show a neutral
+    // localized fallback instead of a nonsensical date.
+    if (!Number.isFinite(ms) || ms < MIN_VALID_TIMESTAMP_MS) {
+      console.warn(`[wallet] invalid transaction date, showing fallback: value="${date}"`);
+      return i18n.t('wallet.date_unavailable');
+    }
+    return new Date(ms).toLocaleDateString(currentLanguage === 'en' ? 'en-US' : 'de-DE', {
       year: 'numeric',
       month: 'short',
       day: 'numeric',
