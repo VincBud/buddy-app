@@ -7,10 +7,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors } from '../../lib/colors';
 import { eventBus } from '../../lib/event-bus';
 import i18n, { useLanguage } from '../../lib/i18n';
-import {
-    getUnreadNotificationCount,
-    loadNotificationsFromStorage,
-} from '../../lib/notifications';
+import { getUnreadNotificationCount } from '../../lib/notifications';
+import { getNotifications } from '../../services/notifications.service';
 import { getActiveUserId } from '../../lib/auth';
 import { loadUserPreferences } from '../../lib/preferences';
 import { fetchVerificationStatus } from '../../services/identity-verification.service';
@@ -65,7 +63,11 @@ export default function TabLayout() {
 
   const loadUnreadCount = useCallback(async () => {
     try {
-      const notifications = await loadNotificationsFromStorage();
+      // Supabase-merged load (not just the local cache): the core cross-user
+      // notifications (new application → owner, accepted/declined → buddy) are
+      // written server-side by the DB trigger, so a storage-only read would keep
+      // the bell badge at 0 until the notification center is opened once.
+      const notifications = await getNotifications();
       const unread = getUnreadNotificationCount(notifications);
       setUnreadCount((prev) => {
         if (unread > prev) {

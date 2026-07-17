@@ -19,8 +19,11 @@ import {
 import { loadJobs } from '../services/jobs.service';
 import {
     deleteJobApplicationNotification,
+    deleteNotificationById,
     getNotifications,
-    setNotifications as saveNotificationsService,
+    markAllNotificationsRead,
+    markNotificationRead,
+    markNotificationUnread,
 } from '../services/notifications.service';
 import { fetchApplicantPreview, ApplicantPreview, updateJobRequest } from '../services/job-requests.service';
 import { layout, spacing } from '../lib/spacing';
@@ -137,13 +140,15 @@ export default function NotificationsScreen() {
     }, [loadNotifications])
   );
 
+  // Read/unread/delete go through the service methods that also sync Supabase.
+  // The remote `read_at` / row is authoritative in getNotifications — a purely
+  // local write is silently reverted by the next merge (unread again, deleted
+  // rows resurrected). Local state is updated optimistically for instant UI.
+
   const markAsRead = async (id: string) => {
     try {
-      const updated = notifications.map((n) =>
-        n.id === id ? { ...n, read: true } : n
-      );
-      setNotifications(updated);
-      await saveNotificationsService(updated);
+      setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: true } : n)));
+      await markNotificationRead(id);
     } catch (error) {
       console.error('Error marking as read:', error);
     }
@@ -151,11 +156,8 @@ export default function NotificationsScreen() {
 
   const markAsUnread = async (id: string) => {
     try {
-      const updated = notifications.map((n) =>
-        n.id === id ? { ...n, read: false } : n
-      );
-      setNotifications(updated);
-      await saveNotificationsService(updated);
+      setNotifications((prev) => prev.map((n) => (n.id === id ? { ...n, read: false } : n)));
+      await markNotificationUnread(id);
     } catch (error) {
       console.error('Error marking as unread:', error);
     }
@@ -163,9 +165,8 @@ export default function NotificationsScreen() {
 
   const deleteNotification = async (id: string) => {
     try {
-      const updated = notifications.filter((n) => n.id !== id);
-      setNotifications(updated);
-      await saveNotificationsService(updated);
+      setNotifications((prev) => prev.filter((n) => n.id !== id));
+      await deleteNotificationById(id);
       showToast(isEnglish ? 'Deleted' : 'Gelöscht');
     } catch (error) {
       console.error('Error deleting notification:', error);
@@ -175,9 +176,8 @@ export default function NotificationsScreen() {
 
   const markAllAsRead = async () => {
     try {
-      const updated = notifications.map((n) => ({ ...n, read: true }));
-      setNotifications(updated);
-      await saveNotificationsService(updated);
+      setNotifications((prev) => prev.map((n) => ({ ...n, read: true })));
+      await markAllNotificationsRead();
       showToast(isEnglish ? 'All marked as read' : 'Alle als gelesen markiert');
     } catch (error) {
       console.error('Error marking all as read:', error);

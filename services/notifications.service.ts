@@ -116,8 +116,14 @@ const createRemoteNotification = async (
   }
 };
 
+// public.notifications.id is uuid. Legacy local-only notifications carry
+// `${timestamp}_${type}` ids — sending those to Supabase just raises
+// "invalid input syntax for type uuid", so remote sync is skipped for them.
+const UUID_REGEX =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const markReadRemote = async (id: string): Promise<void> => {
-  if (!isSupabaseConfigured) return;
+  if (!isSupabaseConfigured || !UUID_REGEX.test(id)) return;
   try {
     const { error } = await supabase
       .from('notifications')
@@ -129,8 +135,21 @@ const markReadRemote = async (id: string): Promise<void> => {
   }
 };
 
+const markUnreadRemote = async (id: string): Promise<void> => {
+  if (!isSupabaseConfigured || !UUID_REGEX.test(id)) return;
+  try {
+    const { error } = await supabase
+      .from('notifications')
+      .update({ read_at: null })
+      .eq('id', id);
+    if (error) console.warn('[notifications.service] Supabase markUnread failed:', error.message);
+  } catch (e) {
+    console.warn('[notifications.service] markUnreadRemote error:', e);
+  }
+};
+
 const deleteRemoteNotification = async (id: string): Promise<void> => {
-  if (!isSupabaseConfigured) return;
+  if (!isSupabaseConfigured || !UUID_REGEX.test(id)) return;
   try {
     const { error } = await supabase.from('notifications').delete().eq('id', id);
     if (error) console.warn('[notifications.service] Supabase delete failed:', error.message);
@@ -302,6 +321,41 @@ export const markNotificationRead = async (
 
   markReadRemote(id).catch((e) => {
     console.warn('[notifications.service] background markRead error:', e);
+  });
+};
+
+export const markNotificationUnread = async (
+  id: string,
+  _userId?: string
+): Promise<void> => {
+  const notifications = await loadNotificationsFromStorage();
+  const updated = notifications.map((n) =>
+    n.id === id ? { ...n, read: false } : n
+  );
+  await saveNotificationsToStorage(updated);
+  eventBus.emit('notifications:changed');
+
+  markUnreadRemote(id).catch((e) => {
+    console.warn('[notifications.service] background markUnread error:', e);
+  });
+};
+
+/**
+ * Deletes a single notification locally AND remotely. Without the remote delete
+ * the Supabase row (authoritative in getNotifications) resurrects the entry on
+ * the next merge — the exact "deleted notification came back" bug.
+ */
+export const deleteNotificationById = async (
+  id: string,
+  _userId?: string
+): Promise<void> => {
+  const notifications = await loadNotificationsFromStorage();
+  const remaining = notifications.filter((n) => n.id !== id);
+  await saveNotificationsToStorage(remaining);
+  eventBus.emit('notifications:changed');
+
+  deleteRemoteNotification(id).catch((e) => {
+    console.warn('[notifications.service] background delete error:', e);
   });
 };
 

@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Crypto from 'expo-crypto';
 import { getActiveUserId } from './auth';
 import { STORAGE_KEYS } from './storage-keys';
 
@@ -102,7 +103,11 @@ export const createNotification = (
   relatedEntityId?: string
 ): Notification => {
   return {
-    id: `${Date.now()}_${type}`,
+    // Real UUID — public.notifications.id is a uuid column, so the optimistic
+    // dual-write only survives in Supabase (and thus survives the 30-second
+    // optimistic window, reinstalls, and other devices) with a valid uuid.
+    // The old `${Date.now()}_${type}` ids failed every remote insert silently.
+    id: Crypto.randomUUID(),
     type,
     title,
     message,
