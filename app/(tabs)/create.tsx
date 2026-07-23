@@ -33,10 +33,11 @@ import { loadPreferredBuddies, PreferredBuddy } from '../../lib/preferred-buddie
 import { incrementReliabilityStats } from '../../services/user.service';
 import {
     calculatePriceBreakdown,
-    formatPriceAmount,
+    formatEuroFromCents,
     MAX_JOB_BASE_PRICE,
     MIN_JOB_BASE_PRICE,
     toStoredPriceValue,
+    tryCalculateJobPricing,
     validateJobBasePrice,
 } from '../../lib/pricing';
 import { layout, spacing } from '../../lib/spacing';
@@ -48,6 +49,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 export default function CreateScreen() {
   useLanguage();
+  const isEnglish = String(i18n.locale).toLowerCase().startsWith('en');
   const insets = useSafeAreaInsets();
   const { user: currentUser } = useCurrentUser();
   const params = useLocalSearchParams<{
@@ -204,6 +206,16 @@ export default function CreateScreen() {
   const priceBreakdown = useMemo(() => {
     if (!priceValidation.isValid || priceValue === null) return null;
     return calculatePriceBreakdown(priceValue);
+  }, [priceValidation.isValid, priceValue]);
+
+  // Canonical cents-based breakdown for on-screen display (job creation UX must
+  // show the full price transparently before publishing). `priceBreakdown` above
+  // (euro floats) is kept for the stored job.price / payment fields — both
+  // ultimately run through the same lib/pricing.ts formula, so they never diverge.
+  const jobPricing = useMemo(() => {
+    if (!priceValidation.isValid || priceValue === null) return null;
+    const result = tryCalculateJobPricing({ jobAmountCents: Math.round(priceValue * 100) });
+    return result.ok ? result.breakdown : null;
   }, [priceValidation.isValid, priceValue]);
 
   const showCustomPriceValidationError =
@@ -716,10 +728,10 @@ export default function CreateScreen() {
             </Text>
           )}
 
-          {priceBreakdown && (
+          {jobPricing && (
             <Text style={styles.pricePreviewText}>
               {i18n.t('create.price_preview', {
-                amount: formatPriceAmount(priceBreakdown.basePrice),
+                amount: formatEuroFromCents(jobPricing.jobAmountCents, isEnglish ? 'en' : 'de'),
               })}
             </Text>
           )}
@@ -859,26 +871,36 @@ export default function CreateScreen() {
           )}
         </View>
 
-        {priceBreakdown && (
+        {jobPricing && (
           <View style={styles.section}>
             <Text style={styles.label}>{i18n.t('create.submit_pricing_title')}</Text>
 
             <View style={styles.submitPricingCard}>
               <View style={styles.priceBreakdownRow}>
                 <Text style={styles.priceBreakdownLabel}>{i18n.t('create.price_line_job')}</Text>
-                <Text style={styles.priceBreakdownValue}>{formatPriceAmount(priceBreakdown.basePrice)} €</Text>
+                <Text style={styles.priceBreakdownValue}>
+                  {formatEuroFromCents(jobPricing.jobAmountCents, isEnglish ? 'en' : 'de')}
+                </Text>
               </View>
 
               <View style={styles.priceBreakdownRow}>
                 <Text style={styles.priceBreakdownLabel}>{i18n.t('create.price_line_fee')}</Text>
-                <Text style={styles.priceBreakdownValue}>{formatPriceAmount(priceBreakdown.platformFee)} €</Text>
+                <Text style={styles.priceBreakdownValue}>
+                  {formatEuroFromCents(jobPricing.serviceFeeCents, isEnglish ? 'en' : 'de')}
+                </Text>
               </View>
+
+              <Text style={styles.feeExplainerText}>{i18n.t('create.fee_explainer')}</Text>
 
               <View style={[styles.priceBreakdownRow, styles.priceBreakdownTotalRow]}>
                 <Text style={styles.priceBreakdownTotalLabel}>{i18n.t('create.price_line_total')}</Text>
-                <Text style={styles.priceBreakdownTotalValue}>{formatPriceAmount(priceBreakdown.totalPrice)} €</Text>
+                <Text style={styles.priceBreakdownTotalValue}>
+                  {formatEuroFromCents(jobPricing.totalAmountCents, isEnglish ? 'en' : 'de')}
+                </Text>
               </View>
             </View>
+
+            <Text style={styles.buddyReceivesNote}>{i18n.t('create.buddy_receives_full_amount')}</Text>
           </View>
         )}
 
@@ -889,7 +911,15 @@ export default function CreateScreen() {
         >
           {isSubmitting
             ? <ActivityIndicator size="small" color={colors.card} />
-            : <Text style={styles.submitText}>{i18n.t('create.find_buddy')}</Text>
+            : (
+              <Text style={styles.submitText}>
+                {jobPricing
+                  ? i18n.t('create.publish_job_for_total', {
+                      amount: formatEuroFromCents(jobPricing.totalAmountCents, isEnglish ? 'en' : 'de'),
+                    })
+                  : i18n.t('create.find_buddy')}
+              </Text>
+            )
           }
         </Pressable>
       </ScrollView>
@@ -1386,6 +1416,19 @@ const styles = StyleSheet.create({
   priceBreakdownTotalValue: {
     ...typography.bodyStrong,
     color: colors.textPrimary,
+  },
+  feeExplainerText: {
+    ...typography.meta,
+    color: colors.textSecondary,
+    marginTop: 2,
+    marginBottom: spacing.xs,
+    lineHeight: 17,
+  },
+  buddyReceivesNote: {
+    ...typography.meta,
+    color: colors.textSecondary,
+    marginTop: spacing.sm,
+    textAlign: 'center',
   },
   priceValidationErrorText: {
     ...typography.meta,

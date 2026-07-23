@@ -2,6 +2,12 @@
   "extends": "expo/tsconfig.base",
   "compilerOptions": {
     "strict": true,
+    // Only needed for lib/pricing.test.ts, which imports './pricing.ts' with an
+    // explicit extension — required by Node's native ESM+TypeScript test runner
+    // (`npm test`), which resolves relative imports strictly. Valid together with
+    // --noEmit (already the case here); does not affect any other file's
+    // extension-less imports, which Metro/bundler resolution still handles as before.
+    "allowImportingTsExtensions": true,
     "paths": {
       "@/*": [
         "./*"

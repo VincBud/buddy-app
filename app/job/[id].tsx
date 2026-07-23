@@ -37,9 +37,9 @@ import { getLevelInfo } from '../../lib/levels';
 import { goBackOrReplace } from '../../lib/navigation';
 import {
     ensureJobPaymentState,
-    formatPriceLine,
     PaymentStatus,
 } from '../../lib/payments';
+import { formatEuroFromCents } from '../../lib/pricing';
 import {
     getInterestedBuddyCount,
     getJobViewsCount,
@@ -981,15 +981,22 @@ export default function JobDetailScreen() {
           <Text style={styles.sectionTitle}>{i18n.t('job.detail_section_payment')}</Text>
           <View style={styles.paymentRow}>
             <Text style={styles.paymentLabel}>{i18n.t('job.payment_line_job')}</Text>
-            <Text style={styles.paymentValue}>{formatPriceLine(getPaymentState(currentJob).buddyEarnings)}</Text>
+            <Text style={styles.paymentValue}>
+              {formatEuroFromCents(Math.round(getPaymentState(currentJob).buddyEarnings * 100), isEnglish ? 'en' : 'de')}
+            </Text>
           </View>
           <View style={styles.paymentRow}>
             <Text style={styles.paymentLabel}>{i18n.t('job.payment_line_fee')}</Text>
-            <Text style={styles.paymentValue}>{formatPriceLine(getPaymentState(currentJob).platformKeeps)}</Text>
+            <Text style={styles.paymentValue}>
+              {formatEuroFromCents(Math.round(getPaymentState(currentJob).platformKeeps * 100), isEnglish ? 'en' : 'de')}
+            </Text>
           </View>
+          <Text style={styles.paymentSubHint}>{i18n.t('job.payment_fee_explainer')}</Text>
           <View style={[styles.paymentRow, styles.paymentTotalRow]}>
             <Text style={styles.paymentTotalLabel}>{i18n.t('job.payment_line_total')}</Text>
-            <Text style={styles.paymentTotalValue}>{formatPriceLine(getPaymentState(currentJob).requesterPays)}</Text>
+            <Text style={styles.paymentTotalValue}>
+              {formatEuroFromCents(Math.round(getPaymentState(currentJob).requesterPays * 100), isEnglish ? 'en' : 'de')}
+            </Text>
           </View>
           {getPaymentStatusHint(getPaymentState(currentJob).paymentStatus, true) && (
             <Text style={styles.paymentStatusHint}>
@@ -1248,8 +1255,11 @@ export default function JobDetailScreen() {
         <Text style={styles.sectionTitle}>{i18n.t('job.detail_section_payout')}</Text>
         <View style={styles.paymentRowSingle}>
           <Text style={styles.paymentSingleLabel}>{i18n.t('job.payout_line_buddy')}</Text>
-          <Text style={styles.paymentSingleValue}>{formatPriceLine(getPaymentState(currentJob).buddyEarnings)}</Text>
+          <Text style={styles.paymentSingleValue}>
+            {formatEuroFromCents(Math.round(getPaymentState(currentJob).buddyEarnings * 100), isEnglish ? 'en' : 'de')}
+          </Text>
         </View>
+        <Text style={styles.paymentSubHint}>{i18n.t('job.payout_fee_note_buddy')}</Text>
         {getPaymentStatusHint(getPaymentState(currentJob).paymentStatus, false) && (
           <Text style={styles.paymentStatusHint}>
             {getPaymentStatusHint(getPaymentState(currentJob).paymentStatus, false)}

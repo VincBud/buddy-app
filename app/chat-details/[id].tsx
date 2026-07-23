@@ -28,7 +28,8 @@ import { loadJobs } from '../../services/jobs.service';
 import { getActiveUserId } from '../../lib/auth';
 import { Job, JobParticipantRole, JobStatus } from '../../lib/jobs';
 import { goBackOrReplace } from '../../lib/navigation';
-import { ensureJobPaymentState, formatPriceLine } from '../../lib/payments';
+import { ensureJobPaymentState } from '../../lib/payments';
+import { formatEuroFromCents } from '../../lib/pricing';
 import { layout, spacing } from '../../lib/spacing';
 import { getReliabilitySignal, getTrustStarFillRatio } from '../../lib/trust';
 import { typography } from '../../lib/typography';
@@ -529,24 +530,33 @@ export default function ChatDetailsScreen() {
               <Text style={styles.sectionTitle}>{i18n.t('chat.detail_section_payout')}</Text>
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>{i18n.t('chat.payout_line_buddy')}</Text>
-                <Text style={styles.paymentValue}>{formatPriceLine(payment.buddyEarnings)}</Text>
+                <Text style={styles.paymentValue}>
+                  {formatEuroFromCents(Math.round(payment.buddyEarnings * 100), isEnglish ? 'en' : 'de')}
+                </Text>
               </View>
               <Text style={styles.payoutHintText}>{i18n.t('chat.payout_hint_buddy')}</Text>
+              <Text style={styles.payoutHintText}>{i18n.t('chat.payout_fee_note_buddy')}</Text>
             </>
           ) : (
             <>
               <Text style={styles.sectionTitle}>{i18n.t('chat.details_section_payment')}</Text>
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>{i18n.t('chat.payment_line_job')}</Text>
-                <Text style={styles.paymentValue}>{formatPriceLine(payment.buddyEarnings)}</Text>
+                <Text style={styles.paymentValue}>
+                  {formatEuroFromCents(Math.round(payment.buddyEarnings * 100), isEnglish ? 'en' : 'de')}
+                </Text>
               </View>
               <View style={styles.paymentRow}>
                 <Text style={styles.paymentLabel}>{i18n.t('chat.payment_line_fee')}</Text>
-                <Text style={styles.paymentValue}>{formatPriceLine(payment.platformKeeps)}</Text>
+                <Text style={styles.paymentValue}>
+                  {formatEuroFromCents(Math.round(payment.platformKeeps * 100), isEnglish ? 'en' : 'de')}
+                </Text>
               </View>
               <View style={[styles.paymentRow, styles.paymentTotalRow]}>
                 <Text style={styles.paymentTotalLabel}>{i18n.t('chat.payment_line_total')}</Text>
-                <Text style={styles.paymentTotalValue}>{formatPriceLine(payment.requesterPays)}</Text>
+                <Text style={styles.paymentTotalValue}>
+                  {formatEuroFromCents(Math.round(payment.requesterPays * 100), isEnglish ? 'en' : 'de')}
+                </Text>
               </View>
             </>
           )}

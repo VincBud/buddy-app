@@ -25,6 +25,14 @@ export type WalletTransaction = {
   createdAt: string;
   jobId?: string;
   jobTitle?: string;
+  // Backend-ready pricing metadata for 'earning' transactions — informational
+  // only, never used in balance math (`amount` already equals jobAmountCents/100,
+  // the Buddy's full job earning). Lets a future backend/analytics layer see the
+  // service fee the Auftraggeber paid for this job without ever crediting that
+  // fee to the Buddy or treating it as platform wallet balance.
+  jobAmountCents?: number;
+  serviceFeeCents?: number;
+  totalAmountCents?: number;
 };
 
 type WalletSettings = {
@@ -148,6 +156,20 @@ const getJobWalletEarningAmount = (job: Pick<Job, 'price'> & Partial<Pick<Job, '
   return roundCurrency(getSafeJobPriceNumber({ price: job.price }));
 };
 
+// Euro-cent pricing metadata for an earning transaction, reusing the job's
+// already-computed payment breakdown (lib/payments.ts, itself backed by the
+// single canonical lib/pricing.ts formula) — no second fee calculation here.
+const getEarningPricingMetadata = (
+  job: Pick<Job, 'price'> & Partial<Pick<Job, 'payment'>>,
+): { jobAmountCents: number; serviceFeeCents: number; totalAmountCents: number } => {
+  const payment = ensureJobPaymentState(job);
+  return {
+    jobAmountCents: Math.round(payment.buddyEarnings * 100),
+    serviceFeeCents: Math.round(payment.platformKeeps * 100),
+    totalAmountCents: Math.round(payment.requesterPays * 100),
+  };
+};
+
 const sanitizeLegacyPayoutRecords = (value: unknown): LegacyPayoutRecord[] => {
   if (!Array.isArray(value)) return [];
 
@@ -218,6 +240,14 @@ const sanitizeTransactions = (value: unknown): WalletTransaction[] => {
     const normalizedStatus: WalletTransactionStatus =
       type === 'earning' ? 'available' : (status as WalletPayoutStatus);
 
+    // Optional pricing metadata — informational only (never fed into balance
+    // math), so a missing/invalid value here just means older stored entries
+    // predate this field; it never invalidates the transaction itself.
+    const safeCents = (value: unknown): number | undefined =>
+      typeof value === 'number' && Number.isFinite(value) && Number.isInteger(value) && value >= 0
+        ? value
+        : undefined;
+
     return [
       {
         id: String(candidate.id),
@@ -227,6 +257,9 @@ const sanitizeTransactions = (value: unknown): WalletTransaction[] => {
         createdAt,
         jobId: candidate.jobId ? String(candidate.jobId) : undefined,
         jobTitle: typeof candidate.jobTitle === 'string' ? candidate.jobTitle.trim() : undefined,
+        jobAmountCents: safeCents(candidate.jobAmountCents),
+        serviceFeeCents: safeCents(candidate.serviceFeeCents),
+        totalAmountCents: safeCents(candidate.totalAmountCents),
       },
     ];
   });
@@ -329,6 +362,7 @@ const ensureCompletedJobEarnings = (
       createdAt: getFallbackTimestamp(job),
       jobId: String(job.id),
       jobTitle: String(job.problem || '').trim(),
+      ...getEarningPricingMetadata(job),
     });
 
     existingEarningJobIds.add(String(job.id));
@@ -560,6 +594,7 @@ export const recordJobCompletionEarning = async (
       createdAt: getFallbackTimestamp(job),
       jobId: String(job.id),
       jobTitle: String(job.problem || '').trim(),
+      ...getEarningPricingMetadata(job),
     },
   ]);
 
